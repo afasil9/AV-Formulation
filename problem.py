@@ -1,61 +1,43 @@
-import numpy as np
 from mpi4py import MPI
+import numpy
+import ufl
 from petsc4py import PETSc
-from ufl import (ds, dx, inner, grad, div, curl, SpatialCoordinate, 
-                 as_vector, sin, cos, pi, variable, TrialFunction, 
-                 TestFunction, Measure, diff)
-from dolfinx import fem, mesh, io, default_scalar_type
-from dolfinx.fem import (dirichletbc, assemble_scalar, form, Function, 
-                         Expression, locate_dofs_topological)
-from dolfinx.fem.petsc import (LinearProblem, assemble_matrix_block, 
-                               assemble_vector_block)
-from dolfinx.io import VTXWriter
-from basix.ufl import element
+from dolfinx import mesh, fem, default_scalar_type
+from dolfinx.fem import functionspace, assemble_scalar
+from dolfinx.fem.petsc import assemble_matrix_block, assemble_vector_block, apply_lifting, set_bc
+from ufl import SpatialCoordinate, sin, pi, grad, div, variable, diff, dx, cos, as_vector,curl, inner
+from dolfinx.fem import Function, Expression, dirichletbc, form
+import numpy as np
 from ufl.core.expr import Expr
+from basix.ufl import element
 
-iteration_count = []
-residual_norm = []
+t = 0  # Start time
+T = 0.1  # End time
+num_steps = 100  # Number of time steps
+d_t = (T - t) / num_steps  # Time step size
 
-n = 30
+n = 8
 degree = 1
 
-def L2_norm(v: Expr):
-    """Computes the L2-norm of v"""
-    return np.sqrt(MPI.COMM_WORLD.allreduce(
-        assemble_scalar(form(inner(v, v) * dx)), op=MPI.SUM))
+domain = mesh.create_unit_cube(MPI.COMM_WORLD, n, n, n, mesh.CellType.hexahedron)
+t = variable(fem.Constant(domain, d_t))
+dt = fem.Constant(domain, d_t)
 
-def monitor(ksp, its, rnorm):
-        iteration_count.append(its)
-        residual_norm.append(rnorm)
-        print("Iteration: {}, preconditioned residual: {}".format(its, rnorm))
-
-domain = mesh.create_unit_cube(MPI.COMM_WORLD, n, n, n)
-
-num_steps = 100
-te = 0.01
-
-dt = fem.Constant(domain, te / num_steps)
-
-t = variable(fem.Constant(domain, 0.0))
-
-# Should be topology dim
-gdim = domain.geometry.dim
-facet_dim = gdim - 1
-
-# Define function spaces
 nedelec_elem = element("N1curl", domain.basix_cell(), degree)
-A_space = fem.functionspace(domain, nedelec_elem)
-
+V = functionspace(domain, nedelec_elem)
 lagrange_element = element("Lagrange", domain.basix_cell(), degree)
-V_space = fem.functionspace(domain, lagrange_element)
+V1 = functionspace(domain, lagrange_element)
 
-# Magnetic Vector Potential
-A  = TrialFunction(A_space)
-v = TestFunction(A_space)
+x = SpatialCoordinate(domain)
 
-# Electric Scalar Potential
-S = TrialFunction(V_space)   
-q = TestFunction(V_space)
+def exact(x, t):
+    return as_vector((cos(pi * x[1]) * sin(pi * t), cos(pi * x[2]) * sin(pi * t), cos(pi * x[0]) * sin(pi * t)))
+
+def exact1(x, t):
+    return sin(pi * x[0]) * sin(pi * x[1]) * sin(pi * x[2]) * sin(pi * t)
+
+uex = exact(x,t)
+uex1 = exact1(x,t)
 
 def boundary_marker(x):
     """Marker function for the boundary of a unit cube"""
@@ -67,82 +49,59 @@ def boundary_marker(x):
                                         boundaries[1]),
                             boundaries[2])
 
+gdim = domain.geometry.dim
+facet_dim = gdim - 1
+
 facets = mesh.locate_entities_boundary(domain, dim=facet_dim,
                                         marker= boundary_marker)
-bdofs0 = fem.locate_dofs_topological(A_space, entity_dim=facet_dim, entities=facets)
-bdofs1 = fem.locate_dofs_topological(V_space, entity_dim=facet_dim, entities=facets)
 
-# Define Exact Solutions for Magnetic Vector Potential and Electric Scalar Potential
-
-def A_ex(x, t):
-    return as_vector((cos(pi * x[1]) * sin(pi * t), cos(pi * x[2]) * sin(pi * t), cos(pi * x[0]) * sin(pi * t)))
-
-def V_ex(x, t):
-    return sin(pi * x[0]) * sin(pi * x[1]) * sin(pi * x[2]) * sin(pi * t)
-
-x = SpatialCoordinate(domain)
-aex = A_ex(x, t)
-vex = V_ex(x, t)
-# Impose boundary conditions on the exact solution
-u_bc_expr_A = Expression(aex, A_space.element.interpolation_points())
-u_bc_A = Function(A_space)
-u_bc_A.interpolate(u_bc_expr_A)
-bc0_ex = dirichletbc(u_bc_A, bdofs0)
-
-u_bc_expr_V = Expression(vex, V_space.element.interpolation_points())
-u_bc_V = Function(V_space)
+bdofs0 = fem.locate_dofs_topological(V, entity_dim=facet_dim, entities=facets)
+u_bc_expr_V = Expression(uex, V.element.interpolation_points())
+u_bc_V = Function(V)
 u_bc_V.interpolate(u_bc_expr_V)
-bc1_ex = dirichletbc(u_bc_V, bdofs1)
+bc_ex = dirichletbc(u_bc_V, bdofs0)
 
-bc = [bc0_ex, bc1_ex]
+bdofs1 = fem.locate_dofs_topological(V1, entity_dim=facet_dim, entities=facets)
+u_bc_expr_V1 = Expression(uex1, V1.element.interpolation_points())
+u_bc_V1 = Function(V1)
+u_bc_V1.interpolate(u_bc_expr_V1)
+bc_ex1 = dirichletbc(u_bc_V1, bdofs1)
 
-mu_R = fem.Constant(domain, default_scalar_type(1.0))
-sigma = fem.Constant(domain, default_scalar_type(1.0))
+bc = [bc_ex, bc_ex1]
 
-# Weak Form
+u_n = Function(V)
+uex_expr = Expression(uex, V.element.interpolation_points())
+u_n.interpolate(uex_expr)
 
-a00 = dt * (1 / mu_R) * inner(curl(A), curl(v)) * dx
-a00 += inner((A*sigma), v) * dx 
+u_n1 = Function(V1)
+uex_expr1 = Expression(uex1, V1.element.interpolation_points())
+u_n1.interpolate(uex_expr1)
 
-a01 = inner((grad(S)* sigma), v) * dx
-a10 = inner(grad(q), (A*sigma)) * dx
+u = ufl.TrialFunction(V)
+v = ufl.TestFunction(V)
 
-a11 = sigma * inner(grad(S), grad(q)) * dx
+u1 = ufl.TrialFunction(V1)
+v1 = ufl.TestFunction(V1)
+
+f = curl(curl(uex)) + diff(uex, t) + grad(diff(uex1,t))
+a00 = dt * inner(curl(u), curl(v)) * dx + inner(u, v) * dx 
+L0 = inner(f, v) * dt * dx + inner(u_n, v) * dx + inner(grad(u_n1), v) * dx
+
+a01 = inner(grad(u1), v) * dx 
+a10 = inner(grad(v1), u) * dx
+
+f1 = -div(f)
+a11 = inner(grad(u1), grad(v1)) * dt * dx + inner(u1, v1) * dx
+L1 = inner(f1, v1) * dt * dx + inner(u_n1, v1) * dx
 
 a = form([[a00, a01], [a10, a11]])
 
 A_mat = assemble_matrix_block(a, bcs = bc)
 A_mat.assemble()
 
-# Need to interpolate if non-zero initially
-A_n = Function(A_space)
-S_n = Function(V_space)
-
-print(f"A norm = {A_mat.norm()}")
-
-j_e = (1 / mu_R) * curl(curl(aex)) + sigma*diff(aex,t)+ sigma*grad(diff(vex,t)) # Strong Form
-time_l0 = (sigma * A_n + sigma * grad(S_n))
-f_time_l0 = dt * j_e + time_l0
-
-f_l1 = inner(-dt * div(j_e), q)  # Strong Form
-time_l1 = inner(grad(q), sigma*A_n) + inner(grad(q), sigma*grad(S_n))
-f_time_l1 = f_l1 + time_l1
-
-L0 = inner(f_time_l0,v) * dx
-L1 = f_time_l1 * dx             
-
 L = form([L0, L1])
 
 b = assemble_vector_block(L, a, bcs = bc)
-print(f"b norm = {b.norm()}")
-
-A_map = A_space.dofmap.index_map
-V_map = V_space.dofmap.index_map
-
-offset_A = A_map.local_range[0] * A_space.dofmap.index_map_bs + V_map.local_range[0]
-offset_S = offset_A + A_map.size_local * A_space.dofmap.index_map_bs
-is_A = PETSc.IS().createStride(A_map.size_local * A_space.dofmap.index_map_bs, offset_A, 1, comm=PETSc.COMM_SELF)
-is_S = PETSc.IS().createStride(V_map.size_local, offset_S, 1, comm=PETSc.COMM_SELF)
 
 ksp = PETSc.KSP().create(domain.comm)
 ksp.setOperators(A_mat)
@@ -159,57 +118,35 @@ opts["mat_mumps_icntl_25"] = 0  # Option to support solving a singular matrix (p
 opts["ksp_error_if_not_converged"] = 1
 ksp.setFromOptions()
 
-offset = A_space.dofmap.index_map.size_local * A_space.dofmap.index_map_bs
+uh, uh1 = Function(V), Function(V1)
+offset = V.dofmap.index_map.size_local * V.dofmap.index_map_bs
 
-aerr = []
-serr = []
-res = []
+sol = A_mat.createVecRight()
 
-X = fem.functionspace(domain, ("Discontinuous Lagrange", degree + 1, (domain.geometry.dim,)))
-A_vis = fem.Function(X)
-A_vis.interpolate(A_n)
+ksp.solve(b, sol)
 
-A_file = io.VTXWriter(domain.comm, "A.bp", A_vis, "BP4")
-A_file.write(t.expression().value)
-
-V_file = io.VTXWriter(domain.comm, "V.bp", S_n, "BP4")
-V_file.write(t.expression().value)
-
-for i in range(num_steps):  
-    print(f"Step {i + 1} of {num_steps}")
-
-    t.expression().value += dt.value
-
-    u_bc_A.interpolate(u_bc_expr_A)
-    u_bc_V.interpolate(u_bc_expr_V)
+for n in range(num_steps):
+    t.expression().value += d_t
     
-    # with b.localForm() as loc_b:
-    #     loc_b.set(0)
+    u_bc_V.interpolate(u_bc_expr_V)
+    u_bc_V1.interpolate(u_bc_expr_V1)
 
-    # Better to not create b and sol each time step
-    b = assemble_vector_block(L, a, bcs = bc)
-    sol = A_mat.createVecRight()  #Solution Vector    
+    b = assemble_vector_block(L, a, bcs=bc)
+
+    sol = A_mat.createVecRight()
     ksp.solve(b, sol)
-       
-    residual = A_mat * sol - b
-    # print('residual is ', residual.norm())
-    res.append(residual.norm())
+    
+    u_n.x.array[:] = sol.array[:offset]
+    u_n1.x.array[:] = sol.array[offset:]
 
-    A_n.x.array[:offset] = sol.array_r[:offset]
-    S_n.x.array[:(len(sol.array_r) - offset)] = sol.array_r[offset:]
-
-    A_vis.interpolate(A_n)
-    A_file.write(t.expression().value)
-    V_file.write(t.expression().value)
+    u_n.x.scatter_forward()
+    u_n1.x.scatter_forward()
 
 
-A_file.close()
+def L2_norm(v: Expr):
+    """Computes the L2-norm of v"""
+    return np.sqrt(MPI.COMM_WORLD.allreduce(
+        assemble_scalar(form(inner(v, v) * ufl.dx)), op=MPI.SUM))
 
-def dV_ex_dt(x, t):
-    return pi * cos(pi * t) * sin(pi * x[0]) * sin(pi * x[1]) * sin(pi * x[2])
-
-
-print(f"e_B  = {L2_norm(curl(A_n) - curl(aex))}")
-# print(f"e_V  = {L2_norm(S_n - vex)}")
-dvex_dt = dV_ex_dt(x, t)
-print(f"e_V = {L2_norm(S_n - dvex_dt)}")
+print('Vector potential error', L2_norm(curl(u_n) - curl(uex)))
+print('Scalar potential error', L2_norm(u_n1 - uex1))
