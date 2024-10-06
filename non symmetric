@@ -1,3 +1,4 @@
+#%%
 from mpi4py import MPI
 import numpy
 import ufl
@@ -12,12 +13,14 @@ from basix.ufl import element
 from ufl.core.expr import Expr
 from scipy.linalg import norm
 
+#%%
+
 t = 0  # Start time
 T = 0.1  # End time
-num_steps = 200  # Number of time steps
+num_steps = 400  # Number of time steps
 d_t = (T - t) / num_steps  # Time step size
 
-n = 8
+n = 4
 degree = 1
 
 domain = mesh.create_unit_cube(MPI.COMM_WORLD, n, n, n, mesh.CellType.hexahedron)
@@ -29,18 +32,19 @@ V = functionspace(domain, nedelec_elem)
 
 V1 = functionspace(domain, ("Lagrange", 1))
 
+nu = fem.Constant(domain, default_scalar_type(10))
+sigma = fem.Constant(domain, default_scalar_type(10))
+
 x = SpatialCoordinate(domain)
 
 def exact(x, t):
     return ufl.as_vector((cos(pi * x[1]) * sin(pi * t), cos(pi * x[2]) * sin(pi * t), cos(pi * x[0]) * sin(pi * t)))
 
-#def exact1(x):
+# def exact1(x):
 #    return 1 + x[0]**2 + 2*x[1]**2 + 2*x[2]**2
-
 
 def exact1(x):
     return sin(pi*x[0]) * sin(pi*x[1]) * sin(pi*x[2])
-
 
 uex = exact(x,t)
 uex1 = exact1(x)
@@ -87,19 +91,19 @@ u_n1.interpolate(uex_expr1)
 u = ufl.TrialFunction(V)
 v = ufl.TestFunction(V)
 
-f0 = curl(curl(uex)) + diff(uex,t) + grad(uex1)
-a00 = dt*ufl.inner(curl(u), curl(v)) * dx + ufl.inner(u, v) * dx
-L0 = dt* ufl.inner(f0, v) * dx + ufl.inner(u_n, v) * dx
+f0 = nu*curl(curl(uex)) + sigma*diff(uex,t) + sigma*grad(uex1)
+a00 = dt*nu*ufl.inner(curl(u), curl(v)) * dx + sigma*ufl.inner(u, v) * dx
+L0 = dt* ufl.inner(f0, v) * dx + sigma*ufl.inner(u_n, v) * dx
 
 u1 = ufl.TrialFunction(V1)
 v1 = ufl.TestFunction(V1)
 
-f1 = -div(grad(uex1)) - div(diff(uex,t))
-a11 = ufl.inner(ufl.grad(u1), ufl.grad(v1)) * ufl.dx
-L1 = f1 * v1 * ufl.dx + ufl.inner(grad(v1), u_n) * ufl.dx
+f1 = -div(sigma*grad(uex1)) - div(sigma*diff(uex,t))
+a11 = ufl.inner(sigma*ufl.grad(u1), ufl.grad(v1)) * ufl.dx
+L1 = f1 * v1 * ufl.dx + sigma*ufl.inner(grad(v1), u_n) * ufl.dx
 
-a01 = dt * ufl.inner(grad(u1), v) * dx
-a10 = ufl.inner(grad(v1), u) * dx
+a01 = dt * ufl.inner(sigma*grad(u1), v) * dx
+a10 = ufl.inner(sigma*grad(v1), u) * dx
 
 a = form([[a00, a01], [a10, a11]])
 
