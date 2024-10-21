@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<!DOCTYPE Xdmf SYSTEM "Xdmf.dtd" []>
+<Xdmf Version="3.0" xmlns:xi="http://www.w3.org/2001/XInclude">
+  <Domain>
+    <Grid Name="domains" GridType="Uniform">
+      <Topology NumberOfElements="304308" TopologyType="Tetrahedron" NodesPerElement="4">
+        <DataItem Dimensions="304308 4" NumberType="UInt" Format="HDF">em_model2_refined.h5:/Mesh/mesh/topology</DataItem>
+      </Topology>
+      <Geometry GeometryType="XYZ">
+        <DataItem Dimensions="55871 3" Format="HDF">em_model2_refined.h5:/Mesh/mesh/geometry</DataItem>
+      </Geometry>
+      <Attribute Name="domains" AttributeType="Scalar" Center="Cell">
+        <DataItem Dimensions="304308 1" Format="HDF">em_model2_refined.h5:/MeshFunction/1/values</DataItem>
+      </Attribute>
+    </Grid>
+    <Grid Name="facets" GridType="Uniform">
+      <Topology NumberOfElements="617903" TopologyType="Triangle" NodesPerElement="3">
+        <DataItem Dimensions="617903 3" NumberType="UInt" Format="HDF">em_model2_refined.h5:/MeshFunction/0/mesh/topology</DataItem>
+      </Topology>
+      <Geometry GeometryType="XYZ">
+        <DataItem Dimensions="55871 3" Format="HDF">em_model2_refined.h5:/Mesh/mesh/geometry</DataItem>
+      </Geometry>
+      <Attribute Name="facets" AttributeType="Scalar" Center="Cell">
+        <DataItem Dimensions="617903 1" Format="HDF">em_model2_refined.h5:/MeshFunction/0/values</DataItem>
+      </Attribute>
+    </Grid>
+  </Domain>
+</Xdmf>
