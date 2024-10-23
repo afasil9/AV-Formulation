@@ -3,17 +3,19 @@ from mpi4py import MPI
 import numpy
 import ufl
 from petsc4py import PETSc
-from dolfinx import mesh, fem, default_scalar_type, io
+from dolfinx import fem, default_scalar_type, io
 from dolfinx.fem import functionspace, assemble_scalar
 from dolfinx.fem.petsc import assemble_matrix_block, assemble_vector_block, apply_lifting, set_bc
 from ufl import SpatialCoordinate, sin, pi, grad, div, variable, diff, cos, curl, ds
 from dolfinx.fem import Function, Expression, dirichletbc, form
 import numpy as np
 from basix.ufl import element
+import ufl.constant
 from ufl.core.expr import Expr
 from scipy.linalg import norm
 from dolfinx.io import XDMFFile
 from dolfinx.fem import locate_dofs_topological
+from ufl import Measure
 
 with XDMFFile(MPI.COMM_WORLD, "em_model2_refined.xdmf", "r") as xdmf:
     domain = xdmf.read_mesh(name="domains")
@@ -25,7 +27,7 @@ with XDMFFile(MPI.COMM_WORLD, "em_model2_refined.xdmf", "r") as xdmf:
 
 ti = 0.0  # Start time
 T = 0.1  # End time
-num_steps = 50  # Number of time steps
+num_steps = 2  # Number of time steps
 d_t = (T - ti) / num_steps  # Time step size
 
 degree = 1
@@ -33,7 +35,6 @@ degree = 1
 t = variable(fem.Constant(domain, ti))
 dt = fem.Constant(domain, d_t)
 
-from ufl import Measure
 dx = Measure("dx", domain=domain, subdomain_data=domain_tags)
 
 nedelec_elem = element("N1curl", domain.basix_cell(), degree)
@@ -49,7 +50,7 @@ mu_0 = 1.2566e-09
 mu_r = fem.Constant(domain, default_scalar_type(1.0))
 mu_c = fem.Constant(domain, default_scalar_type(1.0))
 
-sigma_air = fem.Constant(domain, default_scalar_type(1e-4))
+sigma_air = fem.Constant(domain, default_scalar_type(1e-8))
 sigma_copper = fem.Constant(domain, default_scalar_type(5.96e4))
 
 sigma = fem.Function(const)
@@ -95,15 +96,22 @@ boundary_entities = np.concatenate([ft.find(tag) for tag in tags_to_find])
 bdofs0 = locate_dofs_topological(V, fdim, boundary_entities)
 bc0 = dirichletbc(zeroA, bdofs0)
 
-zeroV = fem.Constant(domain, PETSc.ScalarType(0)) 
-sink_facets = ft.find(9)
-bdofs1 = locate_dofs_topological(V1, fdim, sink_facets)
-bc1 = dirichletbc(zeroV, bdofs1, V1)
+zeroV = fem.Constant(domain, PETSc.ScalarType(0.0)) 
+sink = ft.find(9)
+bdofs_low = locate_dofs_topological(V1, fdim, sink)
+bc_low = dirichletbc(zeroV, bdofs_low, V1)
 
 V_high = fem.Constant(domain, PETSc.ScalarType(1.0))
-bc_high = dirichletbc(V_high, locate_dofs_topological(V1, fdim, ft.find(10)), V1)
+source = ft.find(10)
+bdofs_high = locate_dofs_topological(V1, fdim, source)
+bc_high = dirichletbc(V_high, bdofs_high, V1)
 
-bc = [bc0, bc1]
+bdofs1 = locate_dofs_topological(V1, fdim, boundary_entities)
+bc1 = dirichletbc(zeroV, bdofs1, V1)
+
+bc = [bc0, bc1, bc_low, bc_high]
+
+# Initial Conditions
 
 u_n = fem.Function(V)
 u_n1 = fem.Function(V1)
@@ -111,17 +119,10 @@ u_n1 = fem.Function(V1)
 u = ufl.TrialFunction(V)
 v = ufl.TestFunction(V)
 
-# f0 = fem.Function(const)
-# f0.x.array[:] = 1
-f0 = ufl.as_vector([0,0,1])
-
-# j_sur = fem.Function(V1) 
-# j_sur.interpolate(lambda x: np.full_like(x[0], 1.0)) 
 j_sur = fem.Constant(domain, PETSc.ScalarType(1.0))
 
 a00 = dt*nu*ufl.inner(curl(u), curl(v)) * dx + sigma*ufl.inner(u, v) * dx
-L0 = dt* ufl.inner(f0, v) * dx(3) + sigma*ufl.inner(u_n, v) * dx 
-# L0 = dt*j_sur * v[2] * ds(10) + sigma*ufl.inner(u_n, v) * dx  
+L0 = sigma*ufl.inner(u_n, v) * dx 
 
 u1 = ufl.TrialFunction(V1)
 v1 = ufl.TestFunction(V1)
@@ -178,17 +179,13 @@ B_vis.interpolate(Bexpr)
 B_file = io.VTXWriter(domain.comm, "B.bp", B_vis, "BP4")
 B_file.write(t.expression().value)
 
-V_vis = fem.Function(V_scalar)
-V_vis.interpolate(u_n1)
-
-V_file = io.VTXWriter(domain.comm, "V.bp", V_vis, "BP4")
+V_file = io.VTXWriter(domain.comm, "V.bp", u_n1, "BP4")
 V_file.write(t.expression().value)
 
 J_vis = fem.Function(X)
 J_file = io.VTXWriter(domain.comm, "J.bp", J_vis, "BP4")
 J_file.write(t.expression().value)
 
-#%%
 for n in range(num_steps):
     t.expression().value += d_t
     print(n)
@@ -212,7 +209,6 @@ for n in range(num_steps):
     B_vis.interpolate(Bexpr)
     B_file.write(t.expression().value)
 
-    V_vis.interpolate(u_n1)
     V_file.write(t.expression().value)
 
     E = -(u_n - u_n_prev)/dt - ufl.grad(u_n1)
