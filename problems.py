@@ -84,8 +84,9 @@ bc_dict = {
         (12, 13, 14, 15, 16, 18): 0.0,  # zeroA boundary condition
     },
     'V1': {
-        (1,2,3,4,5,6,7,8,9,11,12,13,14,15,16,18): 0.0,   # Note facet 9 is a sink facet
-        (10,): 1.0,  # source (V_high)
+        (1,2,3,4,5,6,7,8,12,13,14,15,16,17,18): 0.0,   # Note facet 9 is a sink facet
+        (9,): 0.0,  # Sink (V_low)
+        (10,): 1.0,  # Source (V_high)
     }
 }
 
