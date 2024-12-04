@@ -15,7 +15,7 @@ from utils import L2_norm
 
 def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps, f0, f1, bc_dict, uex, uex1, preconditioner):
 
-    #Solver code
+    # Solver code
 
     dx = Measure("dx", domain=domain, subdomain_data=domain_tags)
     dt = fem.Constant(domain, d_t)
@@ -23,7 +23,7 @@ def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps
     sigma = fem.Constant(domain, default_scalar_type(sigma_))
 
     gdim = domain.geometry.dim
-    facet_dim = gdim - 1 
+    facet_dim = gdim - 1
 
     nedelec_elem = element("N1curl", domain.basix_cell(), degree)
     V = fem.functionspace(domain, nedelec_elem)
@@ -38,27 +38,30 @@ def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps
     uex_expr1 = Expression(uex1, V1.element.interpolation_points())
     u_n1.interpolate(uex_expr1)
 
-
     bc0_list = []
     bc1_list = []
 
     for space, bc_dict_space in bc_dict.items():
         for tags, value in bc_dict_space.items():
             boundary_entities = np.concatenate([ft.find(tag) for tag in tags])
-            
+
             if space == "V":
                 # For Nédélec elements (vector field)
                 bdofs = locate_dofs_topological(V, facet_dim, boundary_entities)
                 u_bc_V = Function(V)
-                u_expr_V = Expression(value, V.element.interpolation_points(), comm=MPI.COMM_SELF)
+                u_expr_V = Expression(
+                    value, V.element.interpolation_points(), comm=MPI.COMM_SELF
+                )
                 u_bc_V.interpolate(u_expr_V)
                 bc0_list.append(dirichletbc(u_bc_V, bdofs))
-                
+
             elif space == "V1":
                 # For Lagrange elements (scalar field)
                 bdofs = locate_dofs_topological(V1, facet_dim, boundary_entities)
                 u_bc_V1 = Function(V1)
-                u_expr_V1 = Expression(value, V1.element.interpolation_points(), comm=MPI.COMM_SELF)
+                u_expr_V1 = Expression(
+                    value, V1.element.interpolation_points(), comm=MPI.COMM_SELF
+                )
                 u_bc_V1.interpolate(u_expr_V1)
                 bc1_list.append(dirichletbc(u_bc_V1, bdofs))
 
@@ -70,25 +73,24 @@ def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps
     u1 = ufl.TrialFunction(V1)
     v1 = ufl.TestFunction(V1)
 
-    a00 = dt*nu*ufl.inner(curl(u), curl(v)) * dx + sigma*ufl.inner(u, v) * dx
-    L0 = dt* ufl.inner(f0, v) * dx + sigma*ufl.inner(u_n, v) * dx 
+    a00 = dt * nu * ufl.inner(curl(u), curl(v)) * dx + sigma * ufl.inner(u, v) * dx
+    L0 = dt * ufl.inner(f0, v) * dx + sigma * ufl.inner(u_n, v) * dx
 
-    a01 = dt * sigma*ufl.inner(grad(u1), v) * dx
-    a10 = sigma*ufl.inner(grad(v1), u) *dx
+    a01 = dt * sigma * ufl.inner(grad(u1), v) * dx
+    a10 = sigma * ufl.inner(grad(v1), u) * dx
 
-    a11 = dt * ufl.inner(sigma*ufl.grad(u1), ufl.grad(v1)) * dx
-    L1 = dt * f1 * v1 * dx + sigma*ufl.inner(grad(v1),u_n) *dx
+    a11 = dt * ufl.inner(sigma * ufl.grad(u1), ufl.grad(v1)) * dx
+    L1 = dt * f1 * v1 * dx + sigma * ufl.inner(grad(v1), u_n) * dx
 
     a = form([[a00, a01], [a10, a11]])
 
-    A_mat = assemble_matrix_block(a, bcs = bc)
+    A_mat = assemble_matrix_block(a, bcs=bc)
     A_mat.assemble()
 
     L = form([L0, L1])
-    b = assemble_vector_block(L, a, bcs = bc)
+    b = assemble_vector_block(L, a, bcs=bc)
 
-
-    if preconditioner == 'Direct':
+    if preconditioner == "Direct":
         print("Directs solve")
         ksp = PETSc.KSP().create(domain.comm)
         ksp.setOperators(A_mat)
@@ -98,16 +100,16 @@ def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps
         pc.setType("lu")
         pc.setFactorSolverType("mumps")
 
-        opts = PETSc.Options()  
-        opts["mat_mumps_icntl_14"] = 80  
-        opts["mat_mumps_icntl_24"] = 1  
-        opts["mat_mumps_icntl_25"] = 0  
+        opts = PETSc.Options()
+        opts["mat_mumps_icntl_14"] = 80
+        opts["mat_mumps_icntl_24"] = 1
+        opts["mat_mumps_icntl_25"] = 0
         opts["ksp_error_if_not_converged"] = 1
         ksp.setFromOptions()
     else:
         print("AMS preconditioner")
         a_p = form([[a00, None], [None, a11]])
-        P = assemble_matrix_block(a_p, bcs = bc)
+        P = assemble_matrix_block(a_p, bcs=bc)
         P.assemble()
 
         u_map = V.dofmap.index_map
@@ -116,8 +118,12 @@ def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps
         offset_u = u_map.local_range[0] * V.dofmap.index_map_bs + u1_map.local_range[0]
         offset_u1 = offset_u + u_map.size_local * V.dofmap.index_map_bs
 
-        is_u = PETSc.IS().createStride(u_map.size_local * V.dofmap.index_map_bs, offset_u, 1, comm=PETSc.COMM_SELF)
-        is_u1 = PETSc.IS().createStride(u1_map.size_local, offset_u1, 1, comm=PETSc.COMM_SELF)
+        is_u = PETSc.IS().createStride(
+            u_map.size_local * V.dofmap.index_map_bs, offset_u, 1, comm=PETSc.COMM_SELF
+        )
+        is_u1 = PETSc.IS().createStride(
+            u1_map.size_local, offset_u1, 1, comm=PETSc.COMM_SELF
+        )
 
         ksp = PETSc.KSP().create(domain.comm)
         ksp.setOperators(A_mat, P)
@@ -142,20 +148,26 @@ def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps
 
         if degree == 1:
             cvec_0 = Function(V)
-            cvec_0.interpolate(lambda x: np.vstack((np.ones_like(x[0]),
-                                                    np.zeros_like(x[0]),
-                                                    np.zeros_like(x[0]))))
+            cvec_0.interpolate(
+                lambda x: np.vstack(
+                    (np.ones_like(x[0]), np.zeros_like(x[0]), np.zeros_like(x[0]))
+                )
+            )
             cvec_1 = Function(V)
-            cvec_1.interpolate(lambda x: np.vstack((np.zeros_like(x[0]),
-                                                    np.ones_like(x[0]),
-                                                    np.zeros_like(x[0]))))
+            cvec_1.interpolate(
+                lambda x: np.vstack(
+                    (np.zeros_like(x[0]), np.ones_like(x[0]), np.zeros_like(x[0]))
+                )
+            )
             cvec_2 = Function(V)
-            cvec_2.interpolate(lambda x: np.vstack((np.zeros_like(x[0]),
-                                                    np.zeros_like(x[0]),
-                                                    np.ones_like(x[0]))))
-            pc0.setHYPRESetEdgeConstantVectors(cvec_0.vector,
-                                                cvec_1.vector,
-                                                cvec_2.vector)
+            cvec_2.interpolate(
+                lambda x: np.vstack(
+                    (np.zeros_like(x[0]), np.zeros_like(x[0]), np.ones_like(x[0]))
+                )
+            )
+            pc0.setHYPRESetEdgeConstantVectors(
+                cvec_0.vector, cvec_1.vector, cvec_2.vector
+            )
         else:
             Vec_CG = fem.functionspace(domain, ("CG", degree, (domain.geometry.dim,)))
             Pi = interpolation_matrix(Vec_CG._cpp_object, V._cpp_object)
@@ -199,13 +211,12 @@ def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps
 
     print(ksp.getTolerances())
 
-
     t_prev = t.expression().value - d_t
 
     for n in range(num_steps):
 
         t.expression().value += d_t
-        
+
         u_n_prev = u_n.copy()
         u_n1_prev = u_n1.copy()
 
@@ -235,8 +246,3 @@ def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps
     print("norm of B", L2_norm(B))
 
     return E, B
-
-
-# E field error 0.04691130628700069
-# B field error 0.024820722875097113
-
