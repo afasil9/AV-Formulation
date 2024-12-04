@@ -4,7 +4,8 @@ import sys
 from dolfinx.fem import assemble_scalar, form, functionspace
 from ufl import dx, inner
 from ufl.core.expr import Expr
-from dolfinx import mesh
+from dolfinx import mesh, io
+import gmsh
 
 def par_print(comm, string):
     if comm.rank == 0:
@@ -61,4 +62,82 @@ def create_mesh_fenics(comm, n, boundaries):
                       np.full(msh.topology.index_map(tdim).size_local, 1, dtype=np.int32))
 
     print("number of cells is", msh.topology.index_map(tdim).size_local)
+    return msh, ft, ct
+
+def create_mesh_gmsh(comm, n, boundaries):
+    h = 1 / n
+    gmsh.initialize()
+    if comm.rank == 0:
+        gmsh.model.add("model")
+        factory = gmsh.model.geo
+
+        # Create points for a unit cube
+        points = [
+            factory.addPoint(0.0, 0.0, 0.0, h),  # p0
+            factory.addPoint(1.0, 0.0, 0.0, h),  # p1
+            factory.addPoint(1.0, 1.0, 0.0, h),  # p2
+            factory.addPoint(0.0, 1.0, 0.0, h),  # p3
+            factory.addPoint(0.0, 0.0, 1.0, h),  # p4
+            factory.addPoint(1.0, 0.0, 1.0, h),  # p5
+            factory.addPoint(1.0, 1.0, 1.0, h),  # p6
+            factory.addPoint(0.0, 1.0, 1.0, h),  # p7
+        ]
+
+        # Create lines connecting points
+        lines = [
+            # Bottom face
+            factory.addLine(points[0], points[1]),  # l0
+            factory.addLine(points[1], points[2]),  # l1
+            factory.addLine(points[2], points[3]),  # l2
+            factory.addLine(points[3], points[0]),  # l3
+            # Top face
+            factory.addLine(points[4], points[5]),  # l4
+            factory.addLine(points[5], points[6]),  # l5
+            factory.addLine(points[6], points[7]),  # l6
+            factory.addLine(points[7], points[4]),  # l7
+            # Vertical edges
+            factory.addLine(points[0], points[4]),  # l8
+            factory.addLine(points[1], points[5]),  # l9
+            factory.addLine(points[2], points[6]),  # l10
+            factory.addLine(points[3], points[7]),  # l11
+        ]
+
+        # Create curve loops for each face
+        curve_loops = [
+            factory.addCurveLoop([lines[0], lines[1], lines[2], lines[3]]),    # bottom
+            factory.addCurveLoop([lines[4], lines[5], lines[6], lines[7]]),    # top
+            factory.addCurveLoop([lines[0], lines[9], -lines[4], -lines[8]]),  # front
+            factory.addCurveLoop([lines[1], lines[10], -lines[5], -lines[9]]), # right
+            factory.addCurveLoop([lines[2], lines[11], -lines[6], -lines[10]]),# back
+            factory.addCurveLoop([lines[3], lines[8], -lines[7], -lines[11]]), # left
+        ]
+
+        # Create surfaces for each face
+        surfaces = [factory.addPlaneSurface([loop]) for loop in curve_loops]
+
+        # Create surface loop and volume
+        surface_loop = factory.addSurfaceLoop(surfaces)
+        volume = factory.addVolume([surface_loop])
+
+        factory.synchronize()
+
+        # Add physical groups
+        gmsh.model.addPhysicalGroup(3, [volume], 1)  # Volume
+        
+        # Add boundary markers
+        gmsh.model.addPhysicalGroup(2, [surfaces[0]], boundaries["bottom"])
+        gmsh.model.addPhysicalGroup(2, [surfaces[1]], boundaries["top"])
+        gmsh.model.addPhysicalGroup(2, [surfaces[2]], boundaries["front"])
+        gmsh.model.addPhysicalGroup(2, [surfaces[3]], boundaries["right"])
+        gmsh.model.addPhysicalGroup(2, [surfaces[4]], boundaries["back"])
+        gmsh.model.addPhysicalGroup(2, [surfaces[5]], boundaries["left"])
+
+        gmsh.model.mesh.generate(3)
+        # gmsh.fltk.run()  # Uncomment to visualize mesh
+
+    partitioner = mesh.create_cell_partitioner(mesh.GhostMode.none)
+    msh, ct, ft = io.gmshio.model_to_mesh(
+        gmsh.model, comm, 0, gdim=3, partitioner=partitioner
+    )
+    gmsh.finalize()
     return msh, ft, ct
