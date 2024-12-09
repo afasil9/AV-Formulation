@@ -12,7 +12,7 @@ from dolfinx.fem.petsc import assemble_vector_block, assemble_matrix_block
 from dolfinx.cpp.fem.petsc import discrete_gradient, interpolation_matrix
 from dolfinx.io import VTXWriter
 from basix.ufl import element
-from ufl import grad, inner, curl, Measure, Constant, TrialFunction, TestFunction, variable, div
+from ufl import grad, inner, curl, Measure, Constant, TrialFunction, TestFunction, variable, div, FacetNormal
 from dolfinx import fem
 import ufl
 from utils import L2_norm
@@ -34,11 +34,20 @@ t = variable(fem.Constant(domain, ti))
 nu_ = 1.0
 sigma_ = 1.0
 
+# def exact(x, t):
+#     return as_vector((cos(pi * x[1]) * sin(pi * t), cos(pi * x[2]) * sin(pi * t), cos(pi * x[0]) * sin(pi * t)))
+
+# def exact1(x):
+#     return sin(pi*x[0]) * sin(pi*x[1]) * sin(pi*x[2])
+
 def exact(x, t):
-    return as_vector((cos(pi * x[1]) * sin(pi * t), cos(pi * x[2]) * sin(pi * t), cos(pi * x[0]) * sin(pi * t)))
+    return as_vector((
+        x[1]**2 + x[0] * t, 
+        x[2]**2 + x[1] * t, 
+        x[0]**2 + x[2] * t))
 
 def exact1(x):
-    return sin(pi*x[0]) * sin(pi*x[1]) * sin(pi*x[2])
+    return (x[0]**2) + (x[1]**2) + (x[2]**2)
 
 uex = exact(x,t)
 uex1 = exact1(x)
@@ -66,9 +75,7 @@ preconditioner = 'AMS'
 domain_tags = ct
 
 
-
 dx = Measure("dx", domain=domain, subdomain_data=domain_tags)
-ds = Measure("ds", domain=domain, subdomain_data=domain_tags)
 dt = fem.Constant(domain, d_t)
 nu = fem.Constant(domain, default_scalar_type(nu_))
 sigma = fem.Constant(domain, default_scalar_type(sigma_))
@@ -248,6 +255,8 @@ else:
     pc0.setUp()
     pc1.setUp()
 
+u_n_prev = u_n.copy()
+
 uh, uh1 = Function(V), Function(V1)
 offset = V.dofmap.index_map.size_local * V.dofmap.index_map_bs
 
@@ -262,14 +271,43 @@ u_n1.x.array[:] = uh1.x.array
 
 print(ksp.getTolerances())
 
-t_prev = t.expression().value - d_t
+vector_vis = functionspace(domain, ("Discontinuous Lagrange", degree + 1, (domain.geometry.dim,)))
 
+da_dt = (u_n - u_n_prev) / dt
+E = -grad(u_n1) - da_dt
+B = curl(u_n)
+J = sigma * E
+
+# A_vis = Function(vector_vis)
+# A_file = VTXWriter(domain.comm, "A.bp", A_vis, "BP4")
+# A_vis.interpolate(u_n)
+# A_file.write(t.expression().value)
+
+# B_vis = Function(vector_vis)
+# B_file = VTXWriter(domain.comm, "B.bp", B_vis, "BP4")
+# Bexpr = Expression(B, vector_vis.element.interpolation_points())
+# B_vis.interpolate(Bexpr)
+# B_file.write(t.expression().value)
+
+# V_file = VTXWriter(domain.comm, "V.bp", u_n1, "BP4")
+# V_file.write(t.expression().value)
+
+# J_vis = Function(vector_vis)
+# J_expr = Expression(J, vector_vis.element.interpolation_points())
+# J_vis.interpolate(J_expr)
+# J_file = VTXWriter(domain.comm, "J.bp", J_vis, "BP4")
+
+# E_vis = Function(vector_vis)
+# E_expr = Expression(E, vector_vis.element.interpolation_points())
+# E_vis.interpolate(E_expr)
+# E_file = VTXWriter(domain.comm, "E.bp", E_vis, "BP4")
+
+#%%
 for n in range(num_steps):
 
     t.expression().value += d_t
 
     u_n_prev = u_n.copy()
-    u_n1_prev = u_n1.copy()
 
     u_bc_V.interpolate(u_expr_V)
     u_bc_V1.interpolate(u_expr_V1)
@@ -288,6 +326,25 @@ for n in range(num_steps):
     u_n.x.scatter_forward()
     u_n1.x.scatter_forward()
 
+    # if n % 10 == 0:
+    #     print(f"Time step {n}")
+    #     A_vis.interpolate(u_n)
+    #     A_file.write(t.expression().value)
+
+    #     B = curl(u_n)
+    #     B_vis.interpolate(Bexpr)
+    #     B_file.write(t.expression().value)
+
+    #     da_dt = (u_n - u_n_prev) / dt
+    #     E = -grad(u_n1) - da_dt
+    #     E_vis.interpolate(E_expr)
+    #     E_file.write(t.expression().value)
+
+    #     J = sigma * E
+    #     J_vis.interpolate(J_expr)
+    #     J_file.write(t.expression().value)
+
+#%%
 da_dt = (u_n - u_n_prev) / dt
 E = -grad(u_n1) - da_dt
 B = curl(u_n)
@@ -296,10 +353,7 @@ print("norm of da_dt", L2_norm(da_dt))
 print("norm of E", L2_norm(E))
 print("norm of B", L2_norm(B))
 
-
-
 # Post pro
-
 
 t_prev = T - d_t
 
