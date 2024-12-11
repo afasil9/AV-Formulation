@@ -74,6 +74,7 @@ preconditioner = 'AMS'
 
 domain_tags = ct
 
+#Solver
 
 dx = Measure("dx", domain=domain, subdomain_data=domain_tags)
 dt = fem.Constant(domain, d_t)
@@ -278,29 +279,29 @@ E = -grad(u_n1) - da_dt
 B = curl(u_n)
 J = sigma * E
 
-# A_vis = Function(vector_vis)
-# A_file = VTXWriter(domain.comm, "A.bp", A_vis, "BP4")
-# A_vis.interpolate(u_n)
-# A_file.write(t.expression().value)
+A_vis = Function(vector_vis)
+A_file = VTXWriter(domain.comm, "A.bp", A_vis, "BP4")
+A_vis.interpolate(u_n)
+A_file.write(t.expression().value)
 
-# B_vis = Function(vector_vis)
-# B_file = VTXWriter(domain.comm, "B.bp", B_vis, "BP4")
-# Bexpr = Expression(B, vector_vis.element.interpolation_points())
-# B_vis.interpolate(Bexpr)
-# B_file.write(t.expression().value)
+B_vis = Function(vector_vis)
+B_file = VTXWriter(domain.comm, "B.bp", B_vis, "BP4")
+Bexpr = Expression(B, vector_vis.element.interpolation_points())
+B_vis.interpolate(Bexpr)
+B_file.write(t.expression().value)
 
-# V_file = VTXWriter(domain.comm, "V.bp", u_n1, "BP4")
-# V_file.write(t.expression().value)
+V_file = VTXWriter(domain.comm, "V.bp", u_n1, "BP4")
+V_file.write(t.expression().value)
 
-# J_vis = Function(vector_vis)
-# J_expr = Expression(J, vector_vis.element.interpolation_points())
-# J_vis.interpolate(J_expr)
-# J_file = VTXWriter(domain.comm, "J.bp", J_vis, "BP4")
+J_vis = Function(vector_vis)
+J_expr = Expression(J, vector_vis.element.interpolation_points())
+J_vis.interpolate(J_expr)
+J_file = VTXWriter(domain.comm, "J.bp", J_vis, "BP4")
 
-# E_vis = Function(vector_vis)
-# E_expr = Expression(E, vector_vis.element.interpolation_points())
-# E_vis.interpolate(E_expr)
-# E_file = VTXWriter(domain.comm, "E.bp", E_vis, "BP4")
+E_vis = Function(vector_vis)
+E_expr = Expression(E, vector_vis.element.interpolation_points())
+E_vis.interpolate(E_expr)
+E_file = VTXWriter(domain.comm, "E.bp", E_vis, "BP4")
 
 #%%
 for n in range(num_steps):
@@ -326,32 +327,40 @@ for n in range(num_steps):
     u_n.x.scatter_forward()
     u_n1.x.scatter_forward()
 
-    # if n % 10 == 0:
-    #     print(f"Time step {n}")
-    #     A_vis.interpolate(u_n)
-    #     A_file.write(t.expression().value)
+    if n % 10 == 0:
+        print(f"Time step {n}")
+        A_vis.interpolate(u_n)
+        A_file.write(t.expression().value)
 
-    #     B = curl(u_n)
-    #     B_vis.interpolate(Bexpr)
-    #     B_file.write(t.expression().value)
+        V_file.write(t.expression().value)
 
-    #     da_dt = (u_n - u_n_prev) / dt
-    #     E = -grad(u_n1) - da_dt
-    #     E_vis.interpolate(E_expr)
-    #     E_file.write(t.expression().value)
+        B = curl(u_n)
+        B_vis.interpolate(Bexpr)
+        B_file.write(t.expression().value)
 
-    #     J = sigma * E
-    #     J_vis.interpolate(J_expr)
-    #     J_file.write(t.expression().value)
+        da_dt = (u_n - u_n_prev) / dt
+        E = -grad(u_n1) - da_dt
+        E_expr = Expression(E, vector_vis.element.interpolation_points())
+        E_vis.interpolate(E_expr)
+        E_file.write(t.expression().value)
+
+        J = sigma * E
+        J_expr = Expression(J, vector_vis.element.interpolation_points())
+        J_vis.interpolate(J_expr)
+        J_file.write(t.expression().value)
 
 #%%
 da_dt = (u_n - u_n_prev) / dt
 E = -grad(u_n1) - da_dt
 B = curl(u_n)
+J = sigma * E
 
-print("norm of da_dt", L2_norm(da_dt))
-print("norm of E", L2_norm(E))
-print("norm of B", L2_norm(B))
+# print("norm of B", L2_norm(B))
+# print("norm of B_vis", L2_norm(B_vis))
+# print("norm of E", L2_norm(E))
+# print("norm of E_vis", L2_norm(E_vis))
+# print("norm of J", L2_norm(J))
+# print("norm of J_vis", L2_norm(J_vis))
 
 # Post pro
 
