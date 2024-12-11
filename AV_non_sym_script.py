@@ -1,4 +1,3 @@
-#%%
 from mpi4py import MPI
 from ufl import SpatialCoordinate, variable, as_vector, grad, curl, div, diff, sin, cos, pi
 from dolfinx import fem
@@ -19,7 +18,7 @@ from utils import L2_norm
 
 comm = MPI.COMM_WORLD
 degree = 1
-n = 4
+n = 8
 
 ti = 0.0  # Start time
 T = 0.1  # End time
@@ -55,28 +54,31 @@ uex1 = exact1(x)
 f0 = nu_*curl(curl(uex)) + sigma_*diff(uex,t) + sigma_*grad(uex1)
 f1 = -div(sigma_*grad(uex1)) - div(sigma_*diff(uex,t))
 
-bc_dict = {
-    "V": {
-        # Interpolate vector-valued exact solution on boundaries
-        (boundaries["bottom"], boundaries["top"], 
-        boundaries["front"], boundaries["right"],
-        boundaries["back"], boundaries["left"]): uex
-    },
-    "V1": {
-        # Interpolate scalar exact solution on all boundaries
-        (boundaries["bottom"], boundaries["top"], 
-        boundaries["front"], boundaries["right"],
-        boundaries["back"], boundaries["left"]): uex1
-    }
-}
-
 preconditioner = 'AMS'
 
 domain_tags = ct
+facet_tags = ft
+
+# dirichlet_tags = None
+# neumann_tags = (boundaries["front"], boundaries["right"],
+#            boundaries["back"], boundaries["left"],
+#            boundaries["bottom"], boundaries["top"])
+
+# neumann_tags = None
+# dirichlet_tags = (boundaries["front"], boundaries["right"],
+#            boundaries["back"], boundaries["left"],
+#            boundaries["bottom"], boundaries["top"])
+
+neumann_tags = (boundaries["front"], boundaries["right"])
+
+dirichlet_tags = (boundaries["bottom"], boundaries["top"],
+              boundaries["back"], boundaries["left"])
+
 
 #Solver
 
 dx = Measure("dx", domain=domain, subdomain_data=domain_tags)
+ds = Measure("ds", domain=domain, subdomain_data=facet_tags)
 dt = fem.Constant(domain, d_t)
 nu = fem.Constant(domain, default_scalar_type(nu_))
 sigma = fem.Constant(domain, default_scalar_type(sigma_))
@@ -100,31 +102,35 @@ u_n1.interpolate(uex_expr1)
 bc0_list = []
 bc1_list = []
 
-for space, bc_dict_space in bc_dict.items():
-    for tags, value in bc_dict_space.items():
-        boundary_entities = np.concatenate([ft.find(tag) for tag in tags])
+if dirichlet_tags != None:
+    print("Dirichlet BC are present")
 
-        if space == "V":
-            # For Nédélec elements (vector field)
-            bdofs = locate_dofs_topological(V, facet_dim, boundary_entities)
-            u_bc_V = Function(V)
-            u_expr_V = Expression(
-                value, V.element.interpolation_points(), comm=MPI.COMM_SELF
-            )
-            u_bc_V.interpolate(u_expr_V)
-            bc0_list.append(dirichletbc(u_bc_V, bdofs))
+    boundary_entities = np.concatenate([ft.find(tag) for tag in dirichlet_tags])
 
-        elif space == "V1":
-            # For Lagrange elements (scalar field)
-            bdofs = locate_dofs_topological(V1, facet_dim, boundary_entities)
-            u_bc_V1 = Function(V1)
-            u_expr_V1 = Expression(
-                value, V1.element.interpolation_points(), comm=MPI.COMM_SELF
-            )
-            u_bc_V1.interpolate(u_expr_V1)
-            bc1_list.append(dirichletbc(u_bc_V1, bdofs))
+    bdofs = locate_dofs_topological(V, facet_dim, boundary_entities)
+    u_bc_V = Function(V)
+    u_expr_V = Expression(
+        uex, V.element.interpolation_points(), comm=MPI.COMM_SELF
+    )
+    u_bc_V.interpolate(u_expr_V)
+    bc0_list.append(dirichletbc(u_bc_V, bdofs))
 
-bc = bc0_list + bc1_list
+    bdofs1 = locate_dofs_topological(V1, facet_dim, boundary_entities)
+    u_bc_V1 = Function(V1)
+    u_expr_V1 = Expression(
+        uex1, V1.element.interpolation_points(), comm=MPI.COMM_SELF
+    )
+    u_bc_V1.interpolate(u_expr_V1)
+    bc1_list.append(dirichletbc(u_bc_V1, bdofs1))
+    bc = bc0_list + bc1_list
+
+else:
+    print("No Dirichlet BC")
+    bc = []
+
+norm = FacetNormal(domain)
+hn0 = ufl.cross(nu*curl(uex), norm)
+hn1 = -ufl.dot(norm, sigma*ufl.diff(uex,t) + sigma*grad(uex1))
 
 u = ufl.TrialFunction(V)
 v = ufl.TestFunction(V)
@@ -133,13 +139,20 @@ u1 = ufl.TrialFunction(V1)
 v1 = ufl.TestFunction(V1)
 
 a00 = dt * nu * ufl.inner(curl(u), curl(v)) * dx + sigma * ufl.inner(u, v) * dx
-L0 = dt * ufl.inner(f0, v) * dx + sigma * ufl.inner(u_n, v) * dx
 
 a01 = dt * sigma * ufl.inner(grad(u1), v) * dx
 a10 = sigma * ufl.inner(grad(v1), u) * dx
 
 a11 = dt * ufl.inner(sigma * ufl.grad(u1), ufl.grad(v1)) * dx
-L1 = dt * f1 * v1 * dx + sigma * ufl.inner(grad(v1), u_n) * dx
+
+if neumann_tags != None:
+    print("Neumann BC are present")
+    L0 = dt * ufl.inner(f0, v) * dx + sigma * ufl.inner(u_n, v) * dx + dt * ufl.inner(hn0, v) * ds(neumann_tags)
+    L1 = dt * f1 * v1 * dx + sigma * ufl.inner(grad(v1), u_n) * dx - dt * ufl.inner(hn1, v1) * ds(neumann_tags)
+else:
+    print("No Neumann BC")
+    L0 = dt * ufl.inner(f0, v) * dx + sigma * ufl.inner(u_n, v) * dx
+    L1 = dt * f1 * v1 * dx + sigma * ufl.inner(grad(v1), u_n) * dx
 
 a = form([[a00, a01], [a10, a11]])
 
@@ -284,35 +297,34 @@ A_file = VTXWriter(domain.comm, "A.bp", A_vis, "BP4")
 A_vis.interpolate(u_n)
 A_file.write(t.expression().value)
 
+V_file = VTXWriter(domain.comm, "V.bp", u_n1, "BP4")
+V_file.write(t.expression().value)
+
 B_vis = Function(vector_vis)
 B_file = VTXWriter(domain.comm, "B.bp", B_vis, "BP4")
 Bexpr = Expression(B, vector_vis.element.interpolation_points())
 B_vis.interpolate(Bexpr)
 B_file.write(t.expression().value)
 
-V_file = VTXWriter(domain.comm, "V.bp", u_n1, "BP4")
-V_file.write(t.expression().value)
+E_vis = Function(vector_vis)
+E_expr = Expression(E, vector_vis.element.interpolation_points())
+E_vis.interpolate(E_expr)
+E_file = VTXWriter(domain.comm, "E.bp", E_vis, "BP4")
 
 J_vis = Function(vector_vis)
 J_expr = Expression(J, vector_vis.element.interpolation_points())
 J_vis.interpolate(J_expr)
 J_file = VTXWriter(domain.comm, "J.bp", J_vis, "BP4")
 
-E_vis = Function(vector_vis)
-E_expr = Expression(E, vector_vis.element.interpolation_points())
-E_vis.interpolate(E_expr)
-E_file = VTXWriter(domain.comm, "E.bp", E_vis, "BP4")
-
-#%%
 for n in range(num_steps):
-
     t.expression().value += d_t
 
     u_n_prev = u_n.copy()
 
-    u_bc_V.interpolate(u_expr_V)
-    u_bc_V1.interpolate(u_expr_V1)
-
+    if dirichlet_tags != None:
+        u_bc_V.interpolate(u_expr_V)
+        u_bc_V1.interpolate(u_expr_V1)
+    
     b = assemble_vector_block(L, a, bcs=bc)
 
     sol = A_mat.createVecRight()
@@ -349,18 +361,9 @@ for n in range(num_steps):
         J_vis.interpolate(J_expr)
         J_file.write(t.expression().value)
 
-#%%
 da_dt = (u_n - u_n_prev) / dt
 E = -grad(u_n1) - da_dt
 B = curl(u_n)
-J = sigma * E
-
-# print("norm of B", L2_norm(B))
-# print("norm of B_vis", L2_norm(B_vis))
-# print("norm of E", L2_norm(E))
-# print("norm of E_vis", L2_norm(E_vis))
-# print("norm of J", L2_norm(J))
-# print("norm of J_vis", L2_norm(J_vis))
 
 # Post pro
 
