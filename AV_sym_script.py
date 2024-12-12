@@ -484,6 +484,7 @@ dw_dt = (w_n - w_n_prev) / dt
 
 E = -grad(dw_dt) - da_dt
 B = curl(u_n)
+J = sigma * E
 
 # Post pro
 
