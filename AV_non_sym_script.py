@@ -1,25 +1,30 @@
-#%%
 from mpi4py import MPI
+import numpy as np
+from petsc4py import PETSc
+from dolfinx import default_scalar_type
+from dolfinx.fem.petsc import assemble_vector_block, assemble_matrix_block
+from dolfinx.cpp.fem.petsc import discrete_gradient, interpolation_matrix
+from dolfinx.io import VTXWriter
+from basix.ufl import element
 from ufl import (
-    SpatialCoordinate,
+    TrialFunction,
+    TestFunction,
+    inner,
+    grad,
+    div,
+    curl,
+    cross,
+    dot,
     variable,
     as_vector,
-    grad,
-    curl,
-    div,
     diff,
     sin,
     cos,
     pi,
-    cross,
-    dot,
+    Measure,
+    FacetNormal,
+    SpatialCoordinate,
 )
-from dolfinx import fem
-from utils import L2_norm, create_mesh_fenics, create_mesh_gmsh
-import numpy as np
-from mpi4py import MPI
-from petsc4py import PETSc
-from dolfinx import default_scalar_type
 from dolfinx.fem import (
     dirichletbc,
     form,
@@ -29,24 +34,7 @@ from dolfinx.fem import (
     functionspace,
     Constant,
 )
-from dolfinx.fem.petsc import assemble_vector_block, assemble_matrix_block
-from dolfinx.cpp.fem.petsc import discrete_gradient, interpolation_matrix
-from dolfinx.io import VTXWriter
-from basix.ufl import element
-from ufl import (
-    grad,
-    inner,
-    curl,
-    Measure,
-    Constant,
-    TrialFunction,
-    TestFunction,
-    variable,
-    div,
-    FacetNormal,
-)
-from dolfinx import fem
-from utils import L2_norm
+from utils import L2_norm, create_mesh_fenics, create_mesh_gmsh
 
 comm = MPI.COMM_WORLD
 degree = 1
@@ -61,7 +49,7 @@ boundaries = {"bottom": 1, "top": 2, "front": 3, "right": 4, "back": 5, "left": 
 domain, ft, ct = create_mesh_fenics(comm, n, boundaries)
 
 x = SpatialCoordinate(domain)
-t = variable(fem.Constant(domain, ti))
+t = variable(Constant(domain, ti))
 nu_ = 1.0
 sigma_ = 1.0
 
@@ -138,23 +126,23 @@ results = {
 
 dx = Measure("dx", domain=domain, subdomain_data=domain_tags)
 ds = Measure("ds", domain=domain, subdomain_data=facet_tags)
-dt = fem.Constant(domain, d_t)
-nu = fem.Constant(domain, default_scalar_type(nu_))
-sigma = fem.Constant(domain, default_scalar_type(sigma_))
+dt = Constant(domain, d_t)
+nu = Constant(domain, default_scalar_type(nu_))
+sigma = Constant(domain, default_scalar_type(sigma_))
 
 gdim = domain.geometry.dim
 facet_dim = gdim - 1
 
 nedelec_elem = element("N1curl", domain.basix_cell(), degree)
-V = fem.functionspace(domain, nedelec_elem)
+V = functionspace(domain, nedelec_elem)
 lagrange_elem = element("Lagrange", domain.basix_cell(), degree)
-V1 = fem.functionspace(domain, lagrange_elem)
+V1 = functionspace(domain, lagrange_elem)
 
 u_n = Function(V)
 u_expr = Expression(uex, V.element.interpolation_points())
 u_n.interpolate(u_expr)
 
-u_n1 = fem.Function(V1)
+u_n1 = Function(V1)
 uex_expr1 = Expression(uex1, V1.element.interpolation_points())
 u_n1.interpolate(uex_expr1)
 
@@ -306,7 +294,7 @@ else:
     pc0.setType("hypre")
     pc0.setHYPREType("ams")
 
-    V_CG = fem.functionspace(domain, ("CG", degree))._cpp_object
+    V_CG = functionspace(domain, ("CG", degree))._cpp_object
     G = discrete_gradient(V_CG, V._cpp_object)
     G.assemble()
     pc0.setHYPREDiscreteGradient(G)
@@ -332,7 +320,7 @@ else:
         )
         pc0.setHYPRESetEdgeConstantVectors(cvec_0.vector, cvec_1.vector, cvec_2.vector)
     else:
-        Vec_CG = fem.functionspace(domain, ("CG", degree, (domain.geometry.dim,)))
+        Vec_CG = functionspace(domain, ("CG", degree, (domain.geometry.dim,)))
         Pi = interpolation_matrix(Vec_CG._cpp_object, V._cpp_object)
         Pi.assemble()
 
@@ -482,6 +470,3 @@ E_exact = -grad(uex1) - da_dt_exact
 
 print("E field error", L2_norm(E - E_exact))
 print("B field error", L2_norm(B - curl(uex)))
-
-
-# Ammend code so that if there is no neumann bc
