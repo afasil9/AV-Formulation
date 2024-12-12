@@ -7,34 +7,28 @@ from dolfinx.fem.petsc import assemble_vector_block, assemble_matrix_block
 from dolfinx.cpp.fem.petsc import discrete_gradient, interpolation_matrix
 from dolfinx.io import VTXWriter
 from basix.ufl import element
-from ufl import grad, inner, curl, Measure, Constant, TrialFunction, TestFunction, variable, div
-from dolfinx import fem
-import ufl
-from utils import L2_norm
+from ufl import grad, inner, curl, Measure, TrialFunction, TestFunction, variable, div
 
-
-def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps, f0, f1, bc_dict, uex, uex1, preconditioner):
-
-    # Solver code
+def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps, f0, f1, bc_dict, uex, uex1, preconditioner, results):
 
     dx = Measure("dx", domain=domain, subdomain_data=domain_tags)
-    dt = fem.Constant(domain, d_t)
-    nu = fem.Constant(domain, default_scalar_type(nu_))
-    sigma = fem.Constant(domain, default_scalar_type(sigma_))
+    dt = Constant(domain, d_t)
+    nu = Constant(domain, default_scalar_type(nu_))
+    sigma = Constant(domain, default_scalar_type(sigma_))
 
     gdim = domain.geometry.dim
     facet_dim = gdim - 1
 
     nedelec_elem = element("N1curl", domain.basix_cell(), degree)
-    V = fem.functionspace(domain, nedelec_elem)
+    V = functionspace(domain, nedelec_elem)
     lagrange_elem = element("Lagrange", domain.basix_cell(), degree)
-    V1 = fem.functionspace(domain, lagrange_elem)
+    V1 = functionspace(domain, lagrange_elem)
 
     u_n = Function(V)
     u_expr = Expression(uex, V.element.interpolation_points())
     u_n.interpolate(u_expr)
 
-    u_n1 = fem.Function(V1)
+    u_n1 = Function(V1)
     uex_expr1 = Expression(uex1, V1.element.interpolation_points())
     u_n1.interpolate(uex_expr1)
 
@@ -67,20 +61,20 @@ def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps
 
     bc = bc0_list + bc1_list
 
-    u = ufl.TrialFunction(V)
-    v = ufl.TestFunction(V)
+    u = TrialFunction(V)
+    v = TestFunction(V)
 
-    u1 = ufl.TrialFunction(V1)
-    v1 = ufl.TestFunction(V1)
+    u1 = TrialFunction(V1)
+    v1 = TestFunction(V1)
 
-    a00 = dt * nu * ufl.inner(curl(u), curl(v)) * dx + sigma * ufl.inner(u, v) * dx
-    L0 = dt * ufl.inner(f0, v) * dx + sigma * ufl.inner(u_n, v) * dx
+    a00 = dt * nu * inner(curl(u), curl(v)) * dx + sigma * inner(u, v) * dx
+    L0 = dt * inner(f0, v) * dx + sigma * inner(u_n, v) * dx
 
-    a01 = dt * sigma * ufl.inner(grad(u1), v) * dx
-    a10 = sigma * ufl.inner(grad(v1), u) * dx
+    a01 = dt * sigma * inner(grad(u1), v) * dx
+    a10 = sigma * inner(grad(v1), u) * dx
 
-    a11 = dt * ufl.inner(sigma * ufl.grad(u1), ufl.grad(v1)) * dx
-    L1 = dt * f1 * v1 * dx + sigma * ufl.inner(grad(v1), u_n) * dx
+    a11 = dt * inner(sigma * grad(u1), grad(v1)) * dx
+    L1 = dt * f1 * v1 * dx + sigma * inner(grad(v1), u_n) * dx
 
     a = form([[a00, a01], [a10, a11]])
 
@@ -91,7 +85,7 @@ def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps
     b = assemble_vector_block(L, a, bcs=bc)
 
     if preconditioner == "Direct":
-        print("Directs solve")
+        print("Direct solve")
         ksp = PETSc.KSP().create(domain.comm)
         ksp.setOperators(A_mat)
         ksp.setType("preonly")
@@ -141,7 +135,7 @@ def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps
         pc0.setType("hypre")
         pc0.setHYPREType("ams")
 
-        V_CG = fem.functionspace(domain, ("CG", degree))._cpp_object
+        V_CG = functionspace(domain, ("CG", degree))._cpp_object
         G = discrete_gradient(V_CG, V._cpp_object)
         G.assemble()
         pc0.setHYPREDiscreteGradient(G)
@@ -169,7 +163,7 @@ def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps
                 cvec_0.vector, cvec_1.vector, cvec_2.vector
             )
         else:
-            Vec_CG = fem.functionspace(domain, ("CG", degree, (domain.geometry.dim,)))
+            Vec_CG = functionspace(domain, ("CG", degree, (domain.geometry.dim,)))
             Pi = interpolation_matrix(Vec_CG._cpp_object, V._cpp_object)
             Pi.assemble()
 
@@ -197,6 +191,8 @@ def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps
         pc0.setUp()
         pc1.setUp()
 
+    u_n_prev = u_n.copy()
+
     uh, uh1 = Function(V), Function(V1)
     offset = V.dofmap.index_map.size_local * V.dofmap.index_map_bs
 
@@ -211,14 +207,44 @@ def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps
 
     print(ksp.getTolerances())
 
-    t_prev = t.expression().value - d_t
+    vector_vis = functionspace(domain, ("Discontinuous Lagrange", degree + 1, (domain.geometry.dim,)))
+
+    da_dt = (u_n - u_n_prev) / dt
+    E = -grad(u_n1) - da_dt
+    B = curl(u_n)
+    J = sigma * E
+
+    if results["postpro"] == True:
+        if "A" in results["output_fields"]:
+            A_vis = Function(vector_vis)
+            A_file = VTXWriter(domain.comm, "A.bp", A_vis, "BP4")
+            A_vis.interpolate(u_n)
+            A_file.write(t.expression().value)
+        if "B" in results["output_fields"]:
+            B_vis = Function(vector_vis)
+            B_file = VTXWriter(domain.comm, "B.bp", B_vis, "BP4")
+            Bexpr = Expression(B, vector_vis.element.interpolation_points())
+            B_vis.interpolate(Bexpr)
+            B_file.write(t.expression().value)
+        if "V" in results["output_fields"]:
+            V_file = VTXWriter(domain.comm, "V.bp", u_n1, "BP4")
+            V_file.write(t.expression().value)
+        if "J" in results["output_fields"]:
+            J_vis = Function(vector_vis)
+            J_expr = Expression(J, vector_vis.element.interpolation_points())
+            J_vis.interpolate(J_expr)
+            J_file = VTXWriter(domain.comm, "J.bp", J_vis, "BP4")
+        if "E" in results["output_fields"]:
+            E_vis = Function(vector_vis)
+            E_expr = Expression(E, vector_vis.element.interpolation_points())
+            E_vis.interpolate(E_expr)
+            E_file = VTXWriter(domain.comm, "E.bp", E_vis, "BP4")
 
     for n in range(num_steps):
 
         t.expression().value += d_t
 
         u_n_prev = u_n.copy()
-        u_n1_prev = u_n1.copy()
 
         u_bc_V.interpolate(u_expr_V)
         u_bc_V1.interpolate(u_expr_V1)
@@ -237,12 +263,30 @@ def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps
         u_n.x.scatter_forward()
         u_n1.x.scatter_forward()
 
-    da_dt = (u_n - u_n_prev) / dt
-    E = -grad(u_n1) - da_dt
-    B = curl(u_n)
+        if results["postpro"] == True and n % results["save_frequency"] == 0:
+            A_vis.interpolate(u_n)
+            A_file.write(t.expression().value)
 
-    print("norm of da_dt", L2_norm(da_dt))
-    print("norm of E", L2_norm(E))
-    print("norm of B", L2_norm(B))
+            V_file.write(t.expression().value)
 
-    return E, B
+            B = curl(u_n)
+            B_vis.interpolate(Bexpr)
+            B_file.write(t.expression().value)
+
+            da_dt = (u_n - u_n_prev) / dt
+            E = -grad(u_n1) - da_dt
+            E_expr = Expression(E, vector_vis.element.interpolation_points())
+            E_vis.interpolate(E_expr)
+            E_file.write(t.expression().value)
+
+            J = sigma * E
+            J_expr = Expression(J, vector_vis.element.interpolation_points())
+            J_vis.interpolate(J_expr)
+            J_file.write(t.expression().value)
+
+        da_dt = (u_n - u_n_prev) / dt
+        E = -grad(u_n1) - da_dt
+        B = curl(u_n)
+        J = sigma * E
+
+    return E, B, J
