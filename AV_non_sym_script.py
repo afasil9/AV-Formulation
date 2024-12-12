@@ -1,3 +1,4 @@
+#%%
 from mpi4py import MPI
 from ufl import (
     SpatialCoordinate,
@@ -45,7 +46,6 @@ from ufl import (
     FacetNormal,
 )
 from dolfinx import fem
-import ufl
 from utils import L2_norm
 
 comm = MPI.COMM_WORLD
@@ -65,29 +65,27 @@ t = variable(fem.Constant(domain, ti))
 nu_ = 1.0
 sigma_ = 1.0
 
-
-def exact(x, t):
-    return as_vector(
-        (
-            cos(pi * x[1]) * sin(pi * t),
-            cos(pi * x[2]) * sin(pi * t),
-            cos(pi * x[0]) * sin(pi * t),
-        )
-    )
-
-
-def exact1(x):
-    return sin(pi * x[0]) * sin(pi * x[1]) * sin(pi * x[2])
-
-
 # def exact(x, t):
-#     return as_vector((
-#         x[1]**2 + x[0] * t,
-#         x[2]**2 + x[1] * t,
-#         x[0]**2 + x[2] * t))
+#     return as_vector(
+#         (
+#             cos(pi * x[1]) * sin(pi * t),
+#             cos(pi * x[2]) * sin(pi * t),
+#             cos(pi * x[0]) * sin(pi * t),
+#         )
+#     )
+
 
 # def exact1(x):
-#     return (x[0]**2) + (x[1]**2) + (x[2]**2)
+#     return sin(pi * x[0]) * sin(pi * x[1]) * sin(pi * x[2])
+
+def exact(x, t):
+    return as_vector((
+        x[1]**2 + x[0] * t,
+        x[2]**2 + x[1] * t,
+        x[0]**2 + x[2] * t))
+
+def exact1(x):
+    return (x[0]**2) + (x[1]**2) + (x[2]**2)
 
 uex = exact(x, t)
 uex1 = exact1(x)
@@ -129,6 +127,12 @@ bc_dict = {
     },
 }
 
+results = {
+    "postpro": True,
+    "save_frequency": 10,
+    "output_fields": ["A", "B", "V", "J", "E"]
+}
+
 
 # Solver
 
@@ -161,37 +165,53 @@ bc1_list = []
 for category, conditions in bc_dict.items():
     for field, boundaries in conditions.items():
         if field == "V" and category == "dirichlet":
-            print("Dirichlet BCs are present for Vector Potential")
-            is_dirichlet_V = True
-            for tags, value in boundaries.items():
-                boundary_entities = np.concatenate([ft.find(tag) for tag in tags])
-                bdofs = locate_dofs_topological(V, facet_dim, boundary_entities)
-                u_bc_V = Function(V)
-                u_expr_V = Expression(
-                    value, V.element.interpolation_points(), comm=MPI.COMM_SELF
-                )
-                u_bc_V.interpolate(u_expr_V)
-                bc0_list.append(dirichletbc(u_bc_V, bdofs))
+            if not boundaries:
+                print("No Dirichlet BCs present for Vector Potential")
+                is_dirichlet_V = False
+            else:
+                print("Dirichlet BCs are present for Vector Potential")
+                is_dirichlet_V = True
+                for tags, value in boundaries.items():
+                    boundary_entities = np.concatenate([ft.find(tag) for tag in tags])
+                    bdofs = locate_dofs_topological(V, facet_dim, boundary_entities)
+                    u_bc_V = Function(V)
+                    u_expr_V = Expression(
+                        value, V.element.interpolation_points(), comm=MPI.COMM_SELF
+                    )
+                    u_bc_V.interpolate(u_expr_V)
+                    bc0_list.append(dirichletbc(u_bc_V, bdofs))
         elif field == "V1" and category == "dirichlet":
-            print("Dirichlet BCs are present for Scalar Potential")
-            is_dirichlet_V1 = True
-            for tags, value in boundaries.items():
-                boundary_entities = np.concatenate([ft.find(tag) for tag in tags])
-                bdofs = locate_dofs_topological(V1, facet_dim, boundary_entities)
-                u_bc_V1 = Function(V1)
-                u_expr_V1 = Expression(
-                    value, V1.element.interpolation_points(), comm=MPI.COMM_SELF
-                )
-                u_bc_V1.interpolate(u_expr_V1)
-                bc1_list.append(dirichletbc(u_bc_V1, bdofs))
+            if not boundaries:
+                print("No Dirichlet BCs present for Scalar Potential")
+                is_dirichlet_V1 = False
+            else:
+                print("Dirichlet BCs are present for Scalar Potential")
+                is_dirichlet_V1 = True
+                for tags, value in boundaries.items():
+                    boundary_entities = np.concatenate([ft.find(tag) for tag in tags])
+                    bdofs = locate_dofs_topological(V1, facet_dim, boundary_entities)
+                    u_bc_V1 = Function(V1)
+                    u_expr_V1 = Expression(
+                        value, V1.element.interpolation_points(), comm=MPI.COMM_SELF
+                    )
+                    u_bc_V1.interpolate(u_expr_V1)
+                    bc1_list.append(dirichletbc(u_bc_V1, bdofs))
         elif field == "V" and category == "neumann":
-            print("Neumann BCs are present for Vector Potential")
-            for tags, value in boundaries.items():
-                neumann_tags_V = tags
+            if not boundaries:
+                print("No Neumann BCs present for Vector Potential")
+                neumann_tags_V = None
+            else:
+                print("Neumann BCs are present for Vector Potential")
+                for tags, value in boundaries.items():
+                    neumann_tags_V = tags
         elif field == "V1" and category == "neumann":
-            print("Neumann BCs are present for Scalar Potential")
-            for tags, value in boundaries.items():
-                neumann_tags_V1 = tags
+            if not boundaries:
+                print("No Neumann BCs present for Scalar Potential") 
+                neumann_tags_V1 = None
+            else:
+                print("Neumann BCs are present for Scalar Potential")
+                for tags, value in boundaries.items():
+                    neumann_tags_V1 = tags
 
 bc = bc0_list + bc1_list
 
@@ -365,29 +385,31 @@ E = -grad(u_n1) - da_dt
 B = curl(u_n)
 J = sigma * E
 
-A_vis = Function(vector_vis)
-A_file = VTXWriter(domain.comm, "A.bp", A_vis, "BP4")
-A_vis.interpolate(u_n)
-A_file.write(t.expression().value)
-
-V_file = VTXWriter(domain.comm, "V.bp", u_n1, "BP4")
-V_file.write(t.expression().value)
-
-B_vis = Function(vector_vis)
-B_file = VTXWriter(domain.comm, "B.bp", B_vis, "BP4")
-Bexpr = Expression(B, vector_vis.element.interpolation_points())
-B_vis.interpolate(Bexpr)
-B_file.write(t.expression().value)
-
-E_vis = Function(vector_vis)
-E_expr = Expression(E, vector_vis.element.interpolation_points())
-E_vis.interpolate(E_expr)
-E_file = VTXWriter(domain.comm, "E.bp", E_vis, "BP4")
-
-J_vis = Function(vector_vis)
-J_expr = Expression(J, vector_vis.element.interpolation_points())
-J_vis.interpolate(J_expr)
-J_file = VTXWriter(domain.comm, "J.bp", J_vis, "BP4")
+if results["postpro"] == True:
+    if "A" in results["output_fields"]:
+        A_vis = Function(vector_vis)
+        A_file = VTXWriter(domain.comm, "A.bp", A_vis, "BP4")
+        A_vis.interpolate(u_n)
+        A_file.write(t.expression().value)
+    if "B" in results["output_fields"]:
+        B_vis = Function(vector_vis)
+        B_file = VTXWriter(domain.comm, "B.bp", B_vis, "BP4")
+        Bexpr = Expression(B, vector_vis.element.interpolation_points())
+        B_vis.interpolate(Bexpr)
+        B_file.write(t.expression().value)
+    if "V" in results["output_fields"]:
+        V_file = VTXWriter(domain.comm, "V.bp", u_n1, "BP4")
+        V_file.write(t.expression().value)
+    if "J" in results["output_fields"]:
+        J_vis = Function(vector_vis)
+        J_expr = Expression(J, vector_vis.element.interpolation_points())
+        J_vis.interpolate(J_expr)
+        J_file = VTXWriter(domain.comm, "J.bp", J_vis, "BP4")
+    if "E" in results["output_fields"]:
+        E_vis = Function(vector_vis)
+        E_expr = Expression(E, vector_vis.element.interpolation_points())
+        E_vis.interpolate(E_expr)
+        E_file = VTXWriter(domain.comm, "E.bp", E_vis, "BP4")
 
 for n in range(num_steps):
     t.expression().value += d_t
@@ -413,8 +435,7 @@ for n in range(num_steps):
     u_n.x.scatter_forward()
     u_n1.x.scatter_forward()
 
-    if n % 10 == 0:
-        print(f"Time step {n}")
+    if results["postpro"] == True and n % results["save_frequency"] == 0:
         A_vis.interpolate(u_n)
         A_file.write(t.expression().value)
 
@@ -435,6 +456,16 @@ for n in range(num_steps):
         J_vis.interpolate(J_expr)
         J_file.write(t.expression().value)
 
+if results["postpro"] == True:
+    if "A" in results["output_fields"]:
+        A_file.close()
+    if "B" in results["output_fields"]:
+        B_file.close()
+    if "V" in results["output_fields"]:
+        V_file.close()
+    if "J" in results["output_fields"]:
+        J_file.close()
+
 da_dt = (u_n - u_n_prev) / dt
 E = -grad(u_n1) - da_dt
 B = curl(u_n)
@@ -451,3 +482,6 @@ E_exact = -grad(uex1) - da_dt_exact
 
 print("E field error", L2_norm(E - E_exact))
 print("B field error", L2_norm(B - curl(uex)))
+
+
+# Ammend code so that if there is no neumann bc
