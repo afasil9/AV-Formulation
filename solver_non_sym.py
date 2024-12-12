@@ -9,9 +9,10 @@ from dolfinx.io import VTXWriter
 from basix.ufl import element
 from ufl import grad, inner, curl, Measure, TrialFunction, TestFunction, variable, div
 
-def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps, f0, f1, bc_dict, uex, uex1, preconditioner, results):
+def solver(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_t, num_steps, f0, f1, bc_dict, hn0, hn1, uex, uex1, preconditioner, results):
 
     dx = Measure("dx", domain=domain, subdomain_data=domain_tags)
+    ds = Measure("ds", domain=domain, subdomain_data=facet_tags)
     dt = Constant(domain, d_t)
     nu = Constant(domain, default_scalar_type(nu_))
     sigma = Constant(domain, default_scalar_type(sigma_))
@@ -35,29 +36,56 @@ def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps
     bc0_list = []
     bc1_list = []
 
-    for space, bc_dict_space in bc_dict.items():
-        for tags, value in bc_dict_space.items():
-            boundary_entities = np.concatenate([ft.find(tag) for tag in tags])
-
-            if space == "V":
-                # For Nédélec elements (vector field)
-                bdofs = locate_dofs_topological(V, facet_dim, boundary_entities)
-                u_bc_V = Function(V)
-                u_expr_V = Expression(
-                    value, V.element.interpolation_points(), comm=MPI.COMM_SELF
-                )
-                u_bc_V.interpolate(u_expr_V)
-                bc0_list.append(dirichletbc(u_bc_V, bdofs))
-
-            elif space == "V1":
-                # For Lagrange elements (scalar field)
-                bdofs = locate_dofs_topological(V1, facet_dim, boundary_entities)
-                u_bc_V1 = Function(V1)
-                u_expr_V1 = Expression(
-                    value, V1.element.interpolation_points(), comm=MPI.COMM_SELF
-                )
-                u_bc_V1.interpolate(u_expr_V1)
-                bc1_list.append(dirichletbc(u_bc_V1, bdofs))
+    for category, conditions in bc_dict.items():
+        for field, boundaries in conditions.items():
+            if field == "V" and category == "dirichlet":
+                if not boundaries:
+                    print("No Dirichlet BCs present for Vector Potential")
+                    is_dirichlet_V = False
+                else:
+                    print("Dirichlet BCs are present for Vector Potential")
+                    is_dirichlet_V = True
+                    for tags, value in boundaries.items():
+                        boundary_entities = np.concatenate([facet_tags.find(tag) for tag in tags])
+                        bdofs = locate_dofs_topological(V, facet_dim, boundary_entities)
+                        u_bc_V = Function(V)
+                        u_expr_V = Expression(
+                            value, V.element.interpolation_points(), comm=MPI.COMM_SELF
+                        )
+                        u_bc_V.interpolate(u_expr_V)
+                        bc0_list.append(dirichletbc(u_bc_V, bdofs))
+            elif field == "V1" and category == "dirichlet":
+                if not boundaries:
+                    print("No Dirichlet BCs present for Scalar Potential")
+                    is_dirichlet_V1 = False
+                else:
+                    print("Dirichlet BCs are present for Scalar Potential")
+                    is_dirichlet_V1 = True
+                    for tags, value in boundaries.items():
+                        boundary_entities = np.concatenate([facet_tags.find(tag) for tag in tags])
+                        bdofs = locate_dofs_topological(V1, facet_dim, boundary_entities)
+                        u_bc_V1 = Function(V1)
+                        u_expr_V1 = Expression(
+                            value, V1.element.interpolation_points(), comm=MPI.COMM_SELF
+                        )
+                        u_bc_V1.interpolate(u_expr_V1)
+                        bc1_list.append(dirichletbc(u_bc_V1, bdofs))
+            elif field == "V" and category == "neumann":
+                if not boundaries:
+                    print("No Neumann BCs present for Vector Potential")
+                    neumann_tags_V = None
+                else:
+                    print("Neumann BCs are present for Vector Potential")
+                    for tags, value in boundaries.items():
+                        neumann_tags_V = tags
+            elif field == "V1" and category == "neumann":
+                if not boundaries:
+                    print("No Neumann BCs present for Scalar Potential") 
+                    neumann_tags_V1 = None
+                else:
+                    print("Neumann BCs are present for Scalar Potential")
+                    for tags, value in boundaries.items():
+                        neumann_tags_V1 = tags
 
     bc = bc0_list + bc1_list
 
@@ -68,13 +96,30 @@ def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps
     v1 = TestFunction(V1)
 
     a00 = dt * nu * inner(curl(u), curl(v)) * dx + sigma * inner(u, v) * dx
-    L0 = dt * inner(f0, v) * dx + sigma * inner(u_n, v) * dx
 
     a01 = dt * sigma * inner(grad(u1), v) * dx
     a10 = sigma * inner(grad(v1), u) * dx
 
     a11 = dt * inner(sigma * grad(u1), grad(v1)) * dx
-    L1 = dt * f1 * v1 * dx + sigma * inner(grad(v1), u_n) * dx
+
+    if neumann_tags_V != None:
+        L0 = (
+            dt * inner(f0, v) * dx
+            + sigma * inner(u_n, v) * dx
+            + dt * inner(hn0, v) * ds(neumann_tags_V)
+        )
+    else:
+        L0 = dt * inner(f0, v) * dx + sigma * inner(u_n, v) * dx
+
+    if neumann_tags_V1 != None:
+        L1 = (
+            dt * f1 * v1 * dx
+            + sigma * inner(grad(v1), u_n) * dx
+            - dt * inner(hn1, v1) * ds(neumann_tags_V1)
+        )
+    else:
+        L1 = dt * f1 * v1 * dx + sigma * inner(grad(v1), u_n) * dx
+
 
     a = form([[a00, a01], [a10, a11]])
 
@@ -159,9 +204,7 @@ def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps
                     (np.zeros_like(x[0]), np.zeros_like(x[0]), np.ones_like(x[0]))
                 )
             )
-            pc0.setHYPRESetEdgeConstantVectors(
-                cvec_0.vector, cvec_1.vector, cvec_2.vector
-            )
+            pc0.setHYPRESetEdgeConstantVectors(cvec_0.vector, cvec_1.vector, cvec_2.vector)
         else:
             Vec_CG = functionspace(domain, ("CG", degree, (domain.geometry.dim,)))
             Pi = interpolation_matrix(Vec_CG._cpp_object, V._cpp_object)
@@ -207,7 +250,9 @@ def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps
 
     print(ksp.getTolerances())
 
-    vector_vis = functionspace(domain, ("Discontinuous Lagrange", degree + 1, (domain.geometry.dim,)))
+    vector_vis = functionspace(
+        domain, ("Discontinuous Lagrange", degree + 1, (domain.geometry.dim,))
+    )
 
     da_dt = (u_n - u_n_prev) / dt
     E = -grad(u_n1) - da_dt
@@ -241,13 +286,14 @@ def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps
             E_file = VTXWriter(domain.comm, "E.bp", E_vis, "BP4")
 
     for n in range(num_steps):
-
         t.expression().value += d_t
 
         u_n_prev = u_n.copy()
 
-        u_bc_V.interpolate(u_expr_V)
-        u_bc_V1.interpolate(u_expr_V1)
+        if is_dirichlet_V == True:
+            u_bc_V.interpolate(u_expr_V)
+        if is_dirichlet_V1 == True:
+            u_bc_V1.interpolate(u_expr_V1)
 
         b = assemble_vector_block(L, a, bcs=bc)
 
@@ -283,6 +329,16 @@ def solver(comm, domain, ft, domain_tags, degree, nu_, sigma_, t, d_t, num_steps
             J_expr = Expression(J, vector_vis.element.interpolation_points())
             J_vis.interpolate(J_expr)
             J_file.write(t.expression().value)
+
+    if results["postpro"] == True:
+        if "A" in results["output_fields"]:
+            A_file.close()
+        if "B" in results["output_fields"]:
+            B_file.close()
+        if "V" in results["output_fields"]:
+            V_file.close()
+        if "J" in results["output_fields"]:
+            J_file.close()
 
         da_dt = (u_n - u_n_prev) / dt
         E = -grad(u_n1) - da_dt
