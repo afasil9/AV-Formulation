@@ -1,24 +1,56 @@
 from mpi4py import MPI
-from ufl import SpatialCoordinate, variable, as_vector, grad, curl, div, diff, sin, cos, pi
+from ufl import (
+    SpatialCoordinate,
+    variable,
+    as_vector,
+    grad,
+    curl,
+    div,
+    diff,
+    sin,
+    cos,
+    pi,
+    cross,
+    dot,
+)
 from dolfinx import fem
 from utils import L2_norm, create_mesh_fenics, create_mesh_gmsh
 import numpy as np
 from mpi4py import MPI
 from petsc4py import PETSc
 from dolfinx import default_scalar_type
-from dolfinx.fem import dirichletbc,form, Function, Expression, locate_dofs_topological, functionspace, Constant
+from dolfinx.fem import (
+    dirichletbc,
+    form,
+    Function,
+    Expression,
+    locate_dofs_topological,
+    functionspace,
+    Constant,
+)
 from dolfinx.fem.petsc import assemble_vector_block, assemble_matrix_block
 from dolfinx.cpp.fem.petsc import discrete_gradient, interpolation_matrix
 from dolfinx.io import VTXWriter
 from basix.ufl import element
-from ufl import grad, inner, curl, Measure, Constant, TrialFunction, TestFunction, variable, div, FacetNormal
+from ufl import (
+    grad,
+    inner,
+    curl,
+    Measure,
+    Constant,
+    TrialFunction,
+    TestFunction,
+    variable,
+    div,
+    FacetNormal,
+)
 from dolfinx import fem
 import ufl
 from utils import L2_norm
 
 comm = MPI.COMM_WORLD
 degree = 1
-n = 8
+n = 4
 
 ti = 0.0  # Start time
 T = 0.1  # End time
@@ -26,56 +58,79 @@ num_steps = 100  # Number of time steps
 d_t = (T - ti) / num_steps  # Time step size
 
 boundaries = {"bottom": 1, "top": 2, "front": 3, "right": 4, "back": 5, "left": 6}
-domain,ft, ct = create_mesh_fenics(comm, n, boundaries)
+domain, ft, ct = create_mesh_fenics(comm, n, boundaries)
 
 x = SpatialCoordinate(domain)
 t = variable(fem.Constant(domain, ti))
 nu_ = 1.0
 sigma_ = 1.0
 
-# def exact(x, t):
-#     return as_vector((cos(pi * x[1]) * sin(pi * t), cos(pi * x[2]) * sin(pi * t), cos(pi * x[0]) * sin(pi * t)))
-
-# def exact1(x):
-#     return sin(pi*x[0]) * sin(pi*x[1]) * sin(pi*x[2])
 
 def exact(x, t):
-    return as_vector((
-        x[1]**2 + x[0] * t, 
-        x[2]**2 + x[1] * t, 
-        x[0]**2 + x[2] * t))
+    return as_vector(
+        (
+            cos(pi * x[1]) * sin(pi * t),
+            cos(pi * x[2]) * sin(pi * t),
+            cos(pi * x[0]) * sin(pi * t),
+        )
+    )
+
 
 def exact1(x):
-    return (x[0]**2) + (x[1]**2) + (x[2]**2)
+    return sin(pi * x[0]) * sin(pi * x[1]) * sin(pi * x[2])
 
-uex = exact(x,t)
+
+# def exact(x, t):
+#     return as_vector((
+#         x[1]**2 + x[0] * t,
+#         x[2]**2 + x[1] * t,
+#         x[0]**2 + x[2] * t))
+
+# def exact1(x):
+#     return (x[0]**2) + (x[1]**2) + (x[2]**2)
+
+uex = exact(x, t)
 uex1 = exact1(x)
 
-f0 = nu_*curl(curl(uex)) + sigma_*diff(uex,t) + sigma_*grad(uex1)
-f1 = -div(sigma_*grad(uex1)) - div(sigma_*diff(uex,t))
+f0 = nu_ * curl(curl(uex)) + sigma_ * diff(uex, t) + sigma_ * grad(uex1)
+f1 = -div(sigma_ * grad(uex1)) - div(sigma_ * diff(uex, t))
 
-preconditioner = 'AMS'
+preconditioner = "AMS"
 
 domain_tags = ct
 facet_tags = ft
 
-# dirichlet_tags = None
-# neumann_tags = (boundaries["front"], boundaries["right"],
-#            boundaries["back"], boundaries["left"],
-#            boundaries["bottom"], boundaries["top"])
+norm = FacetNormal(domain)
+hn0 = cross(nu_ * curl(uex), norm)
+hn1 = -dot(norm, sigma_ * diff(uex, t) + sigma_ * grad(uex1))
 
-# neumann_tags = None
-# dirichlet_tags = (boundaries["front"], boundaries["right"],
-#            boundaries["back"], boundaries["left"],
-#            boundaries["bottom"], boundaries["top"])
+bc_dict = {
+    "dirichlet": {
+        "V": {
+            (
+                boundaries["bottom"],
+                boundaries["top"],
+                boundaries["back"],
+                boundaries["left"],
+            ): uex
+        },
+        "V1": {
+            (
+                boundaries["bottom"],
+                boundaries["top"],
+                boundaries["back"],
+                boundaries["left"],
+            ): uex1
+        },
+    },
+    "neumann": {
+        "V": {(boundaries["front"], boundaries["right"]): uex},
+        "V1": {(boundaries["front"], boundaries["right"]): uex1},
+    },
+}
 
-neumann_tags = (boundaries["front"], boundaries["right"])
 
-dirichlet_tags = (boundaries["bottom"], boundaries["top"],
-              boundaries["back"], boundaries["left"])
-
-
-#Solver
+# Solver
 
 dx = Measure("dx", domain=domain, subdomain_data=domain_tags)
 ds = Measure("ds", domain=domain, subdomain_data=facet_tags)
@@ -102,57 +157,75 @@ u_n1.interpolate(uex_expr1)
 bc0_list = []
 bc1_list = []
 
-if dirichlet_tags != None:
-    print("Dirichlet BC are present")
 
-    boundary_entities = np.concatenate([ft.find(tag) for tag in dirichlet_tags])
+for category, conditions in bc_dict.items():
+    for field, boundaries in conditions.items():
+        if field == "V" and category == "dirichlet":
+            print("Dirichlet BCs are present for Vector Potential")
+            is_dirichlet_V = True
+            for tags, value in boundaries.items():
+                boundary_entities = np.concatenate([ft.find(tag) for tag in tags])
+                bdofs = locate_dofs_topological(V, facet_dim, boundary_entities)
+                u_bc_V = Function(V)
+                u_expr_V = Expression(
+                    value, V.element.interpolation_points(), comm=MPI.COMM_SELF
+                )
+                u_bc_V.interpolate(u_expr_V)
+                bc0_list.append(dirichletbc(u_bc_V, bdofs))
+        elif field == "V1" and category == "dirichlet":
+            print("Dirichlet BCs are present for Scalar Potential")
+            is_dirichlet_V1 = True
+            for tags, value in boundaries.items():
+                boundary_entities = np.concatenate([ft.find(tag) for tag in tags])
+                bdofs = locate_dofs_topological(V1, facet_dim, boundary_entities)
+                u_bc_V1 = Function(V1)
+                u_expr_V1 = Expression(
+                    value, V1.element.interpolation_points(), comm=MPI.COMM_SELF
+                )
+                u_bc_V1.interpolate(u_expr_V1)
+                bc1_list.append(dirichletbc(u_bc_V1, bdofs))
+        elif field == "V" and category == "neumann":
+            print("Neumann BCs are present for Vector Potential")
+            for tags, value in boundaries.items():
+                neumann_tags_V = tags
+        elif field == "V1" and category == "neumann":
+            print("Neumann BCs are present for Scalar Potential")
+            for tags, value in boundaries.items():
+                neumann_tags_V1 = tags
 
-    bdofs = locate_dofs_topological(V, facet_dim, boundary_entities)
-    u_bc_V = Function(V)
-    u_expr_V = Expression(
-        uex, V.element.interpolation_points(), comm=MPI.COMM_SELF
+bc = bc0_list + bc1_list
+
+u = TrialFunction(V)
+v = TestFunction(V)
+
+u1 = TrialFunction(V1)
+v1 = TestFunction(V1)
+
+a00 = dt * nu * inner(curl(u), curl(v)) * dx + sigma * inner(u, v) * dx
+
+a01 = dt * sigma * inner(grad(u1), v) * dx
+a10 = sigma * inner(grad(v1), u) * dx
+
+a11 = dt * inner(sigma * grad(u1), grad(v1)) * dx
+
+if neumann_tags_V != None:
+    L0 = (
+        dt * inner(f0, v) * dx
+        + sigma * inner(u_n, v) * dx
+        + dt * inner(hn0, v) * ds(neumann_tags_V)
     )
-    u_bc_V.interpolate(u_expr_V)
-    bc0_list.append(dirichletbc(u_bc_V, bdofs))
+else:
+    L0 = dt * inner(f0, v) * dx + sigma * inner(u_n, v) * dx
 
-    bdofs1 = locate_dofs_topological(V1, facet_dim, boundary_entities)
-    u_bc_V1 = Function(V1)
-    u_expr_V1 = Expression(
-        uex1, V1.element.interpolation_points(), comm=MPI.COMM_SELF
+if neumann_tags_V1 != None:
+    L1 = (
+        dt * f1 * v1 * dx
+        + sigma * inner(grad(v1), u_n) * dx
+        - dt * inner(hn1, v1) * ds(neumann_tags_V1)
     )
-    u_bc_V1.interpolate(u_expr_V1)
-    bc1_list.append(dirichletbc(u_bc_V1, bdofs1))
-    bc = bc0_list + bc1_list
-
 else:
-    print("No Dirichlet BC")
-    bc = []
+    L1 = dt * f1 * v1 * dx + sigma * inner(grad(v1), u_n) * dx
 
-norm = FacetNormal(domain)
-hn0 = ufl.cross(nu*curl(uex), norm)
-hn1 = -ufl.dot(norm, sigma*ufl.diff(uex,t) + sigma*grad(uex1))
-
-u = ufl.TrialFunction(V)
-v = ufl.TestFunction(V)
-
-u1 = ufl.TrialFunction(V1)
-v1 = ufl.TestFunction(V1)
-
-a00 = dt * nu * ufl.inner(curl(u), curl(v)) * dx + sigma * ufl.inner(u, v) * dx
-
-a01 = dt * sigma * ufl.inner(grad(u1), v) * dx
-a10 = sigma * ufl.inner(grad(v1), u) * dx
-
-a11 = dt * ufl.inner(sigma * ufl.grad(u1), ufl.grad(v1)) * dx
-
-if neumann_tags != None:
-    print("Neumann BC are present")
-    L0 = dt * ufl.inner(f0, v) * dx + sigma * ufl.inner(u_n, v) * dx + dt * ufl.inner(hn0, v) * ds(neumann_tags)
-    L1 = dt * f1 * v1 * dx + sigma * ufl.inner(grad(v1), u_n) * dx - dt * ufl.inner(hn1, v1) * ds(neumann_tags)
-else:
-    print("No Neumann BC")
-    L0 = dt * ufl.inner(f0, v) * dx + sigma * ufl.inner(u_n, v) * dx
-    L1 = dt * f1 * v1 * dx + sigma * ufl.inner(grad(v1), u_n) * dx
 
 a = form([[a00, a01], [a10, a11]])
 
@@ -237,9 +310,7 @@ else:
                 (np.zeros_like(x[0]), np.zeros_like(x[0]), np.ones_like(x[0]))
             )
         )
-        pc0.setHYPRESetEdgeConstantVectors(
-            cvec_0.vector, cvec_1.vector, cvec_2.vector
-        )
+        pc0.setHYPRESetEdgeConstantVectors(cvec_0.vector, cvec_1.vector, cvec_2.vector)
     else:
         Vec_CG = fem.functionspace(domain, ("CG", degree, (domain.geometry.dim,)))
         Pi = interpolation_matrix(Vec_CG._cpp_object, V._cpp_object)
@@ -285,7 +356,9 @@ u_n1.x.array[:] = uh1.x.array
 
 print(ksp.getTolerances())
 
-vector_vis = functionspace(domain, ("Discontinuous Lagrange", degree + 1, (domain.geometry.dim,)))
+vector_vis = functionspace(
+    domain, ("Discontinuous Lagrange", degree + 1, (domain.geometry.dim,))
+)
 
 da_dt = (u_n - u_n_prev) / dt
 E = -grad(u_n1) - da_dt
@@ -321,10 +394,11 @@ for n in range(num_steps):
 
     u_n_prev = u_n.copy()
 
-    if dirichlet_tags != None:
+    if is_dirichlet_V == True:
         u_bc_V.interpolate(u_expr_V)
+    if is_dirichlet_V1 == True:
         u_bc_V1.interpolate(u_expr_V1)
-    
+
     b = assemble_vector_block(L, a, bcs=bc)
 
     sol = A_mat.createVecRight()
