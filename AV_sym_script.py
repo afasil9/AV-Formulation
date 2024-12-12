@@ -377,7 +377,6 @@ uh1.x.array[:] = sol.array_r[offset:]
 u_n.x.array[:] = uh.x.array
 w_n.x.array[:] = uh1.x.array
 
-print("norm of u_n after solve", L2_norm(u_n))
 print(ksp.getTolerances())
 
 vector_vis = functionspace(
@@ -418,11 +417,8 @@ if results["postpro"] == True:
         E_file = VTXWriter(domain.comm, "E.bp", E_vis, "BP4")
 
 
-t_prev = variable(Constant(domain, ti - d_t))
-
 for n in range(num_steps):
     t.expression().value += d_t
-    t_prev.expression().value += d_t
 
     u_n_prev = u_n.copy()
     w_n_prev = w_n.copy()
