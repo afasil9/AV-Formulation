@@ -61,7 +61,7 @@ def create_mesh_fenics(comm, n, boundaries):
     ct = mesh.meshtags(msh, tdim, np.array(range(msh.topology.index_map(tdim).size_local), dtype=np.int32), 
                       np.full(msh.topology.index_map(tdim).size_local, 1, dtype=np.int32))
 
-    print("number of cells is", msh.topology.index_map(tdim).size_local)
+    # print("number of cells is", msh.topology.index_map(tdim).size_local)
     return msh, ft, ct
 
 def create_mesh_gmsh(comm, n, boundaries):

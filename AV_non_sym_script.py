@@ -34,11 +34,11 @@ from dolfinx.fem import (
     functionspace,
     Constant,
 )
-from utils import L2_norm, create_mesh_fenics, create_mesh_gmsh
+from utils import L2_norm, create_mesh_fenics, create_mesh_gmsh, par_print
 
 comm = MPI.COMM_WORLD
 degree = 1
-n = 4
+n = 8
 
 ti = 0.0  # Start time
 T = 0.1  # End time
@@ -115,8 +115,9 @@ bc_dict = {
     },
 }
 
+
 results = {
-    "postpro": True,
+    "postpro": False,
     "save_frequency": 10,
     "output_fields": ["A", "B", "V", "J", "E"]
 }
@@ -154,10 +155,10 @@ for category, conditions in bc_dict.items():
     for field, boundaries in conditions.items():
         if field == "V" and category == "dirichlet":
             if not boundaries:
-                print("No Dirichlet BCs present for Vector Potential")
+                par_print(comm, "No Dirichlet BCs present for Vector Potential")
                 is_dirichlet_V = False
             else:
-                print("Dirichlet BCs are present for Vector Potential")
+                par_print(comm, "Dirichlet BCs are present for Vector Potential")
                 is_dirichlet_V = True
                 for tags, value in boundaries.items():
                     boundary_entities = np.concatenate([ft.find(tag) for tag in tags])
@@ -170,10 +171,10 @@ for category, conditions in bc_dict.items():
                     bc0_list.append(dirichletbc(u_bc_V, bdofs))
         elif field == "V1" and category == "dirichlet":
             if not boundaries:
-                print("No Dirichlet BCs present for Scalar Potential")
+                par_print(comm,"No Dirichlet BCs present for Scalar Potential")
                 is_dirichlet_V1 = False
             else:
-                print("Dirichlet BCs are present for Scalar Potential")
+                par_print(comm,"Dirichlet BCs are present for Scalar Potential")
                 is_dirichlet_V1 = True
                 for tags, value in boundaries.items():
                     boundary_entities = np.concatenate([ft.find(tag) for tag in tags])
@@ -186,18 +187,18 @@ for category, conditions in bc_dict.items():
                     bc1_list.append(dirichletbc(u_bc_V1, bdofs))
         elif field == "V" and category == "neumann":
             if not boundaries:
-                print("No Neumann BCs present for Vector Potential")
+                par_print(comm,"No Neumann BCs present for Vector Potential")
                 neumann_tags_V = None
             else:
-                print("Neumann BCs are present for Vector Potential")
+                par_print(comm,"Neumann BCs are present for Vector Potential")
                 for tags, value in boundaries.items():
                     neumann_tags_V = tags
         elif field == "V1" and category == "neumann":
             if not boundaries:
-                print("No Neumann BCs present for Scalar Potential") 
+                par_print(comm,"No Neumann BCs present for Scalar Potential")
                 neumann_tags_V1 = None
             else:
-                print("Neumann BCs are present for Scalar Potential")
+                par_print(comm,"Neumann BCs are present for Scalar Potential")
                 for tags, value in boundaries.items():
                     neumann_tags_V1 = tags
 
@@ -244,7 +245,7 @@ L = form([L0, L1])
 b = assemble_vector_block(L, a, bcs=bc)
 
 if preconditioner == "Direct":
-    print("Direct solve")
+    par_print(comm,"Direct solve")
     ksp = PETSc.KSP().create(domain.comm)
     ksp.setOperators(A_mat)
     ksp.setType("preonly")
@@ -260,7 +261,8 @@ if preconditioner == "Direct":
     opts["ksp_error_if_not_converged"] = 1
     ksp.setFromOptions()
 else:
-    print("AMS preconditioner")
+    par_print(comm,"AMS preconditioner")
+
     a_p = form([[a00, None], [None, a11]])
     P = assemble_matrix_block(a_p, bcs=bc)
     P.assemble()
@@ -348,8 +350,6 @@ else:
     pc0.setUp()
     pc1.setUp()
 
-
-#%%
 u_n_prev = u_n.copy()
 
 uh, uh1 = Function(V), Function(V1)
@@ -358,13 +358,17 @@ offset = V.dofmap.index_map.size_local * V.dofmap.index_map_bs
 sol = A_mat.createVecRight()
 ksp.solve(b, sol)
 
-uh.x.array[:] = sol.array_r[:offset]
-uh1.x.array[:] = sol.array_r[offset:]
+uh.x.array[:offset] = sol.array_r[:offset]
+uh1.x.array[:(len(sol.array_r) - offset)] = sol.array_r[offset:]
+
+uh.x.scatter_forward()
+uh1.x.scatter_forward()
 
 u_n.x.array[:] = uh.x.array
 u_n1.x.array[:] = uh1.x.array
 
-print(ksp.getTolerances())
+u_n.x.scatter_forward()
+u_n1.x.scatter_forward()
 
 vector_vis = functionspace(
     domain, ("Discontinuous Lagrange", degree + 1, (domain.geometry.dim,))
@@ -416,8 +420,11 @@ for n in range(num_steps):
     sol = A_mat.createVecRight()
     ksp.solve(b, sol)
 
-    uh.x.array[:] = sol.array_r[:offset]
-    uh1.x.array[:] = sol.array_r[offset:]
+    uh.x.array[:offset] = sol.array_r[:offset]
+    uh1.x.array[:(len(sol.array_r) - offset)] = sol.array_r[offset:]
+
+    uh.x.scatter_forward()
+    uh1.x.scatter_forward()
 
     u_n.x.array[:] = uh.x.array
     u_n1.x.array[:] = uh1.x.array
@@ -470,5 +477,5 @@ uex_final = exact(x, T)
 da_dt_exact = (uex_final - uex_prev) / d_t
 E_exact = -grad(uex1) - da_dt_exact
 
-print("E field error", L2_norm(E - E_exact))
-print("B field error", L2_norm(B - curl(uex)))
+par_print(comm, f"E field error {L2_norm(E - E_exact)}")
+par_print(comm, f"B field error {L2_norm(B - curl(uex))}")
