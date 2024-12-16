@@ -204,7 +204,7 @@ def solver(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_t, n
                     (np.zeros_like(x[0]), np.zeros_like(x[0]), np.ones_like(x[0]))
                 )
             )
-            pc0.setHYPRESetEdgeConstantVectors(cvec_0.vector, cvec_1.vector, cvec_2.vector)
+            pc0.setHYPRESetEdgeConstantVectors(cvec_0.x.petsc_vec, cvec_1.x.petsc_vec, cvec_2.x.petsc_vec)
         else:
             Vec_CG = functionspace(domain, ("CG", degree, (domain.geometry.dim,)))
             Pi = interpolation_matrix(Vec_CG._cpp_object, V._cpp_object)
