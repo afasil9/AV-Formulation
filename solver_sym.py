@@ -8,6 +8,7 @@ from dolfinx.cpp.fem.petsc import discrete_gradient, interpolation_matrix
 from dolfinx.io import VTXWriter
 from basix.ufl import element
 from ufl import grad, inner, curl, Measure, TrialFunction, TestFunction, variable, div
+from utils import par_print
 
 def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_t, num_steps, f0, f1, bc_dict, hn0, hn1, uex, wex, preconditioner, results):
 
@@ -25,6 +26,11 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
     lagrange_elem = element("Lagrange", domain.basix_cell(), degree)
     V1 = functionspace(domain, lagrange_elem)
 
+    u_dofs = V.dofmap.index_map.size_global * V.dofmap.index_map_bs
+    u1_dofs = V1.dofmap.index_map.size_global * V1.dofmap.index_map_bs
+    total_dofs = u_dofs + u1_dofs
+    par_print(comm, f"Total degrees of freedom: {total_dofs}")
+
     u_n = Function(V)
     u_expr = Expression(uex, V.element.interpolation_points())
     u_n.interpolate(u_expr)
@@ -40,10 +46,10 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
         for field, boundaries in conditions.items():
             if field == "V" and category == "dirichlet":
                 if not boundaries:
-                    print("No Dirichlet BCs present for Vector Potential")
+                    par_print(comm,"No Dirichlet BCs present for Vector Potential")
                     is_dirichlet_V = False
                 else:
-                    print("Dirichlet BCs are present for Vector Potential")
+                    par_print(comm,"Dirichlet BCs are present for Vector Potential")
                     is_dirichlet_V = True
                     for tags, value in boundaries.items():
                         boundary_entities = np.concatenate([facet_tags.find(tag) for tag in tags])
@@ -56,10 +62,10 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
                         bc0_list.append(dirichletbc(u_bc_V, bdofs))
             elif field == "V1" and category == "dirichlet":
                 if not boundaries:
-                    print("No Dirichlet BCs present for Scalar Potential")
+                    par_print(comm,"No Dirichlet BCs present for Scalar Potential")
                     is_dirichlet_V1 = False
                 else:
-                    print("Dirichlet BCs are present for Scalar Potential")
+                    par_print(comm,"Dirichlet BCs are present for Scalar Potential")
                     is_dirichlet_V1 = True
                     for tags, value in boundaries.items():
                         boundary_entities = np.concatenate([facet_tags.find(tag) for tag in tags])
@@ -72,18 +78,18 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
                         bc1_list.append(dirichletbc(w_bc_V1, bdofs))
             elif field == "V" and category == "neumann":
                 if not boundaries:
-                    print("No Neumann BCs present for Vector Potential")
+                    par_print(comm,"No Neumann BCs present for Vector Potential")
                     neumann_tags_V = None
                 else:
-                    print("Neumann BCs are present for Vector Potential")
+                    par_print(comm,"Neumann BCs are present for Vector Potential")
                     for tags, value in boundaries.items():
                         neumann_tags_V = tags
             elif field == "V1" and category == "neumann":
                 if not boundaries:
-                    print("No Neumann BCs present for Scalar Potential")
+                    par_print(comm,"No Neumann BCs present for Scalar Potential")
                     neumann_tags_V1 = None
                 else:
-                    print("Neumann BCs are present for Scalar Potential")
+                    par_print(comm,"Neumann BCs are present for Scalar Potential")
                     for tags, value in boundaries.items():
                         neumann_tags_V1 = tags
 
@@ -141,7 +147,7 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
     b = assemble_vector_block(L, a, bcs=bc)
 
     if preconditioner == "Direct":
-        print("Direct solve")
+        par_print(comm, "Direct solver")
         ksp = PETSc.KSP().create(domain.comm)
         ksp.setOperators(A_mat)
         ksp.setType("preonly")
@@ -157,7 +163,7 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
         opts["ksp_error_if_not_converged"] = 1
         ksp.setFromOptions()
     else:
-        print("AMS preconditioner")
+        par_print(comm, "AMS preconditioner")
         a_p = form([[a00, None], [None, a11]])
         P = assemble_matrix_block(a_p, bcs=bc)
         P.assemble()
@@ -215,7 +221,7 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
                     (np.zeros_like(x[0]), np.zeros_like(x[0]), np.ones_like(x[0]))
                 )
             )
-            pc0.setHYPRESetEdgeConstantVectors(cvec_0.vector, cvec_1.vector, cvec_2.vector)
+            pc0.setHYPRESetEdgeConstantVectors(cvec_0.x.petsc_vec, cvec_1.x.petsc_vec, cvec_2.x.petsc_vec)
         else:
             Vec_CG = functionspace(domain, ("CG", degree, (domain.geometry.dim,)))
             Pi = interpolation_matrix(Vec_CG._cpp_object, V._cpp_object)
@@ -225,7 +231,7 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
             pc0.setHYPRESetInterpolations(domain.geometry.dim, None, None, Pi, None)
 
         opts = PETSc.Options()
-        opts[f"{ksp_u.prefix}pc_hypre_ams_cycle_type"] = 7
+        opts[f"{ksp_u.prefix}pc_hypre_ams_cycle_type"] = 14
         opts[f"{ksp_u.prefix}pc_hypre_ams_tol"] = 0
         opts[f"{ksp_u.prefix}pc_hypre_ams_max_iter"] = 1
         opts[f"{ksp_u.prefix}pc_hypre_ams_amg_beta_theta"] = 0.25
@@ -254,13 +260,19 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
     sol = A_mat.createVecRight()
     ksp.solve(b, sol)
 
-    uh.x.array[:] = sol.array_r[:offset]
-    uh1.x.array[:] = sol.array_r[offset:]
+    uh.x.array[:offset] = sol.array_r[:offset]
+    uh1.x.array[:(len(sol.array_r) - offset)] = sol.array_r[offset:]
+
+    uh.x.scatter_forward()
+    uh1.x.scatter_forward()
 
     u_n.x.array[:] = uh.x.array
     w_n.x.array[:] = uh1.x.array
 
-    print(ksp.getTolerances())
+    u_n.x.scatter_forward()
+    w_n.x.scatter_forward()
+
+    # print(ksp.getTolerances())
 
     vector_vis = functionspace(
         domain, ("Discontinuous Lagrange", degree + 1, (domain.geometry.dim,))
@@ -316,8 +328,11 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
         sol = A_mat.createVecRight()
         ksp.solve(b, sol)
 
-        uh.x.array[:] = sol.array_r[:offset]
-        uh1.x.array[:] = sol.array_r[offset:]
+        uh.x.array[:offset] = sol.array_r[:offset]
+        uh1.x.array[:(len(sol.array_r) - offset)] = sol.array_r[offset:]
+
+        uh.x.scatter_forward()
+        uh1.x.scatter_forward()
 
         u_n.x.array[:] = uh.x.array
         w_n.x.array[:] = uh1.x.array
@@ -325,25 +340,25 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
         u_n.x.scatter_forward()
         w_n.x.scatter_forward()
 
+        B = curl(u_n)
+        da_dt = (u_n - u_n_prev) / dt
+        dw_dt = (w_n - w_n_prev) / dt
+        E = -grad(dw_dt) - da_dt
+        J = sigma * E
+
         if results["postpro"] == True and n % results["save_frequency"] == 0:
             A_vis.interpolate(u_n)
             A_file.write(t.expression().value)
 
             V_file.write(t.expression().value)
 
-            B = curl(u_n)
             B_vis.interpolate(Bexpr)
             B_file.write(t.expression().value)
 
-            da_dt = (u_n - u_n_prev) / dt
-            dw_dt = (w_n - w_n_prev) / dt
-
-            E = -grad(dw_dt) - da_dt
             E_expr = Expression(E, vector_vis.element.interpolation_points())
             E_vis.interpolate(E_expr)
             E_file.write(t.expression().value)
 
-            J = sigma * E
             J_expr = Expression(J, vector_vis.element.interpolation_points())
             J_vis.interpolate(J_expr)
             J_file.write(t.expression().value)
