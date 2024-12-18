@@ -8,6 +8,7 @@ from dolfinx.cpp.fem.petsc import discrete_gradient, interpolation_matrix
 from dolfinx.io import VTXWriter
 from basix.ufl import element
 from ufl import grad, inner, curl, Measure, TrialFunction, TestFunction, variable, div
+from utils import par_print
 
 def solver(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_t, num_steps, f0, f1, bc_dict, hn0, hn1, uex, uex1, preconditioner, results):
 
@@ -25,6 +26,11 @@ def solver(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_t, n
     lagrange_elem = element("Lagrange", domain.basix_cell(), degree)
     V1 = functionspace(domain, lagrange_elem)
 
+    u_dofs = V.dofmap.index_map.size_global * V.dofmap.index_map_bs
+    u1_dofs = V1.dofmap.index_map.size_global * V1.dofmap.index_map_bs
+    total_dofs = u_dofs + u1_dofs
+    par_print(comm, f"Total degrees of freedom for V: {total_dofs}")
+
     u_n = Function(V)
     u_expr = Expression(uex, V.element.interpolation_points())
     u_n.interpolate(u_expr)
@@ -40,10 +46,10 @@ def solver(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_t, n
         for field, boundaries in conditions.items():
             if field == "V" and category == "dirichlet":
                 if not boundaries:
-                    print("No Dirichlet BCs present for Vector Potential")
+                    par_print(comm, "No Dirichlet BCs present for Vector Potential")
                     is_dirichlet_V = False
                 else:
-                    print("Dirichlet BCs are present for Vector Potential")
+                    par_print(comm, "Dirichlet BCs are present for Vector Potential")
                     is_dirichlet_V = True
                     for tags, value in boundaries.items():
                         boundary_entities = np.concatenate([facet_tags.find(tag) for tag in tags])
@@ -56,10 +62,10 @@ def solver(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_t, n
                         bc0_list.append(dirichletbc(u_bc_V, bdofs))
             elif field == "V1" and category == "dirichlet":
                 if not boundaries:
-                    print("No Dirichlet BCs present for Scalar Potential")
+                    par_print(comm,"No Dirichlet BCs present for Scalar Potential")
                     is_dirichlet_V1 = False
                 else:
-                    print("Dirichlet BCs are present for Scalar Potential")
+                    par_print(comm,"Dirichlet BCs are present for Scalar Potential")
                     is_dirichlet_V1 = True
                     for tags, value in boundaries.items():
                         boundary_entities = np.concatenate([facet_tags.find(tag) for tag in tags])
@@ -72,18 +78,18 @@ def solver(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_t, n
                         bc1_list.append(dirichletbc(u_bc_V1, bdofs))
             elif field == "V" and category == "neumann":
                 if not boundaries:
-                    print("No Neumann BCs present for Vector Potential")
+                    par_print(comm,"No Neumann BCs present for Vector Potential")
                     neumann_tags_V = None
                 else:
-                    print("Neumann BCs are present for Vector Potential")
+                    par_print(comm,"Neumann BCs are present for Vector Potential")
                     for tags, value in boundaries.items():
                         neumann_tags_V = tags
             elif field == "V1" and category == "neumann":
                 if not boundaries:
-                    print("No Neumann BCs present for Scalar Potential") 
+                    par_print(comm,"No Neumann BCs present for Scalar Potential")
                     neumann_tags_V1 = None
                 else:
-                    print("Neumann BCs are present for Scalar Potential")
+                    par_print(comm,"Neumann BCs are present for Scalar Potential")
                     for tags, value in boundaries.items():
                         neumann_tags_V1 = tags
 
@@ -130,7 +136,7 @@ def solver(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_t, n
     b = assemble_vector_block(L, a, bcs=bc)
 
     if preconditioner == "Direct":
-        print("Direct solve")
+        par_print(comm,"Direct solve")
         ksp = PETSc.KSP().create(domain.comm)
         ksp.setOperators(A_mat)
         ksp.setType("preonly")
@@ -146,7 +152,7 @@ def solver(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_t, n
         opts["ksp_error_if_not_converged"] = 1
         ksp.setFromOptions()
     else:
-        print("AMS preconditioner")
+        par_print(comm,"AMS preconditioner")
         a_p = form([[a00, None], [None, a11]])
         P = assemble_matrix_block(a_p, bcs=bc)
         P.assemble()
@@ -242,13 +248,17 @@ def solver(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_t, n
     sol = A_mat.createVecRight()
     ksp.solve(b, sol)
 
-    uh.x.array[:] = sol.array_r[:offset]
-    uh1.x.array[:] = sol.array_r[offset:]
+    uh.x.array[:offset] = sol.array_r[:offset]
+    uh1.x.array[:(len(sol.array_r) - offset)] = sol.array_r[offset:]
+
+    uh.x.scatter_forward()
+    uh1.x.scatter_forward()
 
     u_n.x.array[:] = uh.x.array
     u_n1.x.array[:] = uh1.x.array
 
-    print(ksp.getTolerances())
+    u_n.x.scatter_forward()
+    u_n1.x.scatter_forward()
 
     vector_vis = functionspace(
         domain, ("Discontinuous Lagrange", degree + 1, (domain.geometry.dim,))
@@ -300,14 +310,21 @@ def solver(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_t, n
         sol = A_mat.createVecRight()
         ksp.solve(b, sol)
 
-        uh.x.array[:] = sol.array_r[:offset]
-        uh1.x.array[:] = sol.array_r[offset:]
+        uh.x.array[:offset] = sol.array_r[:offset]
+        uh1.x.array[:(len(sol.array_r) - offset)] = sol.array_r[offset:]
+
+        uh.x.scatter_forward()
+        uh1.x.scatter_forward()
 
         u_n.x.array[:] = uh.x.array
         u_n1.x.array[:] = uh1.x.array
 
         u_n.x.scatter_forward()
         u_n1.x.scatter_forward()
+
+        B = curl(u_n)
+        da_dt = (u_n - u_n_prev) / dt
+        E = -grad(u_n1) - da_dt
 
         if results["postpro"] == True and n % results["save_frequency"] == 0:
             A_vis.interpolate(u_n)
