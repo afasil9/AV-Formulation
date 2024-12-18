@@ -29,7 +29,7 @@ def solver(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_t, n
     u_dofs = V.dofmap.index_map.size_global * V.dofmap.index_map_bs
     u1_dofs = V1.dofmap.index_map.size_global * V1.dofmap.index_map_bs
     total_dofs = u_dofs + u1_dofs
-    par_print(comm, f"Total degrees of freedom for V: {total_dofs}")
+    par_print(comm, f"Total degrees of freedom: {total_dofs}")
 
     u_n = Function(V)
     u_expr = Expression(uex, V.element.interpolation_points())
@@ -220,7 +220,7 @@ def solver(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_t, n
             pc0.setHYPRESetInterpolations(domain.geometry.dim, None, None, Pi, None)
 
         opts = PETSc.Options()
-        opts[f"{ksp_u.prefix}pc_hypre_ams_cycle_type"] = 7
+        opts[f"{ksp_u.prefix}pc_hypre_ams_cycle_type"] = 14
         opts[f"{ksp_u.prefix}pc_hypre_ams_tol"] = 0
         opts[f"{ksp_u.prefix}pc_hypre_ams_max_iter"] = 1
         opts[f"{ksp_u.prefix}pc_hypre_ams_amg_beta_theta"] = 0.25

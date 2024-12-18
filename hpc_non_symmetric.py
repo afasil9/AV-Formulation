@@ -209,7 +209,7 @@ for n in n_values:
     u_dofs = V.dofmap.index_map.size_global * V.dofmap.index_map_bs
     u1_dofs = V1.dofmap.index_map.size_global * V1.dofmap.index_map_bs
     total_dofs = u_dofs + u1_dofs
-    par_print(comm, f"Total degrees of freedom for V: {total_dofs}")
+    par_print(comm, f"Total degrees of freedom: {total_dofs}")
 
     #%%
     a00 = dt * nu * inner(curl(u), curl(v)) * dx + sigma * inner(u, v) * dx

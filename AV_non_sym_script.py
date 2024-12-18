@@ -139,6 +139,11 @@ V = functionspace(domain, nedelec_elem)
 lagrange_elem = element("Lagrange", domain.basix_cell(), degree)
 V1 = functionspace(domain, lagrange_elem)
 
+u_dofs = V.dofmap.index_map.size_global * V.dofmap.index_map_bs
+u1_dofs = V1.dofmap.index_map.size_global * V1.dofmap.index_map_bs
+total_dofs = u_dofs + u1_dofs
+par_print(comm, f"Total degrees of freedom: {total_dofs}")
+
 u_n = Function(V)
 u_expr = Expression(uex, V.element.interpolation_points())
 u_n.interpolate(u_expr)
@@ -330,7 +335,7 @@ else:
         pc0.setHYPRESetInterpolations(domain.geometry.dim, None, None, Pi, None)
 
     opts = PETSc.Options()
-    opts[f"{ksp_u.prefix}pc_hypre_ams_cycle_type"] = 7
+    opts[f"{ksp_u.prefix}pc_hypre_ams_cycle_type"] = 14
     opts[f"{ksp_u.prefix}pc_hypre_ams_tol"] = 0
     opts[f"{ksp_u.prefix}pc_hypre_ams_max_iter"] = 1
     opts[f"{ksp_u.prefix}pc_hypre_ams_amg_beta_theta"] = 0.25
@@ -432,23 +437,24 @@ for n in range(num_steps):
     u_n.x.scatter_forward()
     u_n1.x.scatter_forward()
 
+    B = curl(u_n)
+    da_dt = (u_n - u_n_prev) / dt
+    E = -grad(u_n1) - da_dt
+    J = sigma * E
+
     if results["postpro"] == True and n % results["save_frequency"] == 0:
         A_vis.interpolate(u_n)
         A_file.write(t.expression().value)
 
         V_file.write(t.expression().value)
 
-        B = curl(u_n)
         B_vis.interpolate(Bexpr)
         B_file.write(t.expression().value)
 
-        da_dt = (u_n - u_n_prev) / dt
-        E = -grad(u_n1) - da_dt
         E_expr = Expression(E, vector_vis.element.interpolation_points())
         E_vis.interpolate(E_expr)
         E_file.write(t.expression().value)
 
-        J = sigma * E
         J_expr = Expression(J, vector_vis.element.interpolation_points())
         J_vis.interpolate(J_expr)
         J_file.write(t.expression().value)
