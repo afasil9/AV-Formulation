@@ -1,46 +1,24 @@
-#%%
-import ufl
-from mpi4py import MPI
-from petsc4py.PETSc import ScalarType
-from ufl import ds, dx, grad, inner, curl
-from dolfinx import fem, io, mesh, plot, default_scalar_type
-from dolfinx.fem import dirichletbc
-from dolfinx.fem.petsc import LinearProblem
-from dolfinx.io import XDMFFile
-from ufl.core.expr import Expr
-from petsc4py import PETSc
-from ufl import SpatialCoordinate, as_vector, sin, pi, curl
-from dolfinx.fem import (assemble_scalar, form, Function)
-from matplotlib import pyplot as plt
-from dolfinx.fem.petsc import assemble_matrix, assemble_vector_block, assemble_matrix_block
-from dolfinx.fem import petsc, Expression, locate_dofs_topological
-from dolfinx.io import VTXWriter
-from dolfinx.cpp.fem.petsc import (discrete_gradient,
-                                   interpolation_matrix)
-from basix.ufl import element
-from petsc4py import PETSc
-from mpi4py import MPI
 import numpy as np
 from basix.ufl import element
-from dolfinx import fem, io, la, default_scalar_type
+from dolfinx import default_scalar_type, fem, mesh
 from dolfinx.cpp.fem.petsc import discrete_gradient, interpolation_matrix
-from dolfinx.fem import Function, form, locate_dofs_topological, petsc
+from dolfinx.fem import Expression, Function, dirichletbc, form
+from dolfinx.fem.petsc import assemble_matrix_block, assemble_vector_block
+from mpi4py import MPI
+from petsc4py import PETSc
 from ufl import (
-    Measure,
     SpatialCoordinate,
     TestFunction,
     TrialFunction,
+    as_vector,
     curl,
-    cos,
+    dx,
+    grad,
     inner,
-    cross,
+    variable,
 )
-import ufl
-import sys
-from ufl import variable
-from scipy.linalg import norm
-from utils import L2_norm
 
+from utils import L2_norm
 
 comm = MPI.COMM_WORLD
 degree = 1
@@ -203,9 +181,10 @@ if degree == 1:
     cvec_2.interpolate(lambda x: np.vstack((np.zeros_like(x[0]),
                                             np.zeros_like(x[0]),
                                             np.ones_like(x[0]))))
-    pc0.setHYPRESetEdgeConstantVectors(cvec_0.vector,
-                                        cvec_1.vector,
-                                        cvec_2.vector)
+
+    pc0.setHYPRESetEdgeConstantVectors(
+        cvec_0.x.petsc_vec, cvec_1.x.petsc_vec, cvec_2.x.petsc_vec
+        )
 else:
     Vec_CG = fem.functionspace(domain, ("CG", degree, (domain.geometry.dim,)))
     Pi = interpolation_matrix(Vec_CG._cpp_object, V._cpp_object)
@@ -249,7 +228,7 @@ u_n1.x.array[:] = uh1.x.array
 
 print(ksp.getTolerances())
 
-#%%
+
 
 for n in range(num_steps):
     t.expression().value += d_t
@@ -270,7 +249,6 @@ for n in range(num_steps):
 
     u_n.x.scatter_forward()
     u_n1.x.scatter_forward()
-
 
 print(L2_norm(u_n - uex))
 print(L2_norm(u_n1 - uex1))

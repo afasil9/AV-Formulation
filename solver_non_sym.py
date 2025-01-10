@@ -1,14 +1,24 @@
 import numpy as np
+from basix.ufl import element
+from dolfinx import default_scalar_type
+from dolfinx.cpp.fem.petsc import discrete_gradient, interpolation_matrix
+from dolfinx.fem import (
+    Constant,
+    Expression,
+    Function,
+    dirichletbc,
+    form,
+    functionspace,
+    locate_dofs_topological,
+)
+from dolfinx.fem.petsc import assemble_matrix_block, assemble_vector_block
+from dolfinx.io import VTXWriter
 from mpi4py import MPI
 from petsc4py import PETSc
-from dolfinx import default_scalar_type
-from dolfinx.fem import dirichletbc,form, Function, Expression, locate_dofs_topological, functionspace, Constant
-from dolfinx.fem.petsc import assemble_vector_block, assemble_matrix_block
-from dolfinx.cpp.fem.petsc import discrete_gradient, interpolation_matrix
-from dolfinx.io import VTXWriter
-from basix.ufl import element
-from ufl import grad, inner, curl, Measure, TrialFunction, TestFunction, variable, div
+from ufl import Measure, TestFunction, TrialFunction, curl, grad, inner
+
 from utils import par_print
+
 
 def solver(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_t, num_steps, f0, f1, bc_dict, hn0, hn1, uex, uex1, preconditioner, results):
 
@@ -108,7 +118,7 @@ def solver(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_t, n
 
     a11 = dt * inner(sigma * grad(u1), grad(v1)) * dx
 
-    if neumann_tags_V != None:
+    if neumann_tags_V is not None:
         L0 = (
             dt * inner(f0, v) * dx
             + sigma * inner(u_n, v) * dx
@@ -117,7 +127,7 @@ def solver(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_t, n
     else:
         L0 = dt * inner(f0, v) * dx + sigma * inner(u_n, v) * dx
 
-    if neumann_tags_V1 != None:
+    if neumann_tags_V1 is not None:
         L1 = (
             dt * f1 * v1 * dx
             + sigma * inner(grad(v1), u_n) * dx
@@ -269,7 +279,7 @@ def solver(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_t, n
     B = curl(u_n)
     J = sigma * E
 
-    if results["postpro"] == True:
+    if results["postpro"] is True:
         if "A" in results["output_fields"]:
             A_vis = Function(vector_vis)
             A_file = VTXWriter(domain.comm, "A.bp", A_vis, "BP4")
@@ -300,9 +310,9 @@ def solver(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_t, n
 
         u_n_prev = u_n.copy()
 
-        if is_dirichlet_V == True:
+        if is_dirichlet_V is True:
             u_bc_V.interpolate(u_expr_V)
-        if is_dirichlet_V1 == True:
+        if is_dirichlet_V1 is True:
             u_bc_V1.interpolate(u_expr_V1)
 
         b = assemble_vector_block(L, a, bcs=bc)
@@ -326,7 +336,7 @@ def solver(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_t, n
         da_dt = (u_n - u_n_prev) / dt
         E = -grad(u_n1) - da_dt
 
-        if results["postpro"] == True and n % results["save_frequency"] == 0:
+        if results["postpro"] is True and n % results["save_frequency"] == 0:
             A_vis.interpolate(u_n)
             A_file.write(t.expression().value)
 
@@ -347,7 +357,7 @@ def solver(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_t, n
             J_vis.interpolate(J_expr)
             J_file.write(t.expression().value)
 
-    if results["postpro"] == True:
+    if results["postpro"] is True:
         if "A" in results["output_fields"]:
             A_file.close()
         if "B" in results["output_fields"]:

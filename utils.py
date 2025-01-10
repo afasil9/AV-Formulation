@@ -1,11 +1,13 @@
-import numpy as np
-from mpi4py import MPI
 import sys
-from dolfinx.fem import assemble_scalar, form, functionspace
+
+import gmsh
+import numpy as np
+from dolfinx import io, mesh
+from dolfinx.fem import assemble_scalar, form
+from mpi4py import MPI
 from ufl import dx, inner
 from ufl.core.expr import Expr
-from dolfinx import mesh, io
-import gmsh
+
 
 def par_print(comm, string):
     if comm.rank == 0:

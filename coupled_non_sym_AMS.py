@@ -1,35 +1,33 @@
-from mpi4py import MPI
 import numpy as np
-from petsc4py import PETSc
-from dolfinx import default_scalar_type, mesh
-from dolfinx.fem.petsc import assemble_vector_block, assemble_matrix_block
-from dolfinx.cpp.fem.petsc import discrete_gradient, interpolation_matrix
 from basix.ufl import element
+from dolfinx import default_scalar_type, mesh
+from dolfinx.cpp.fem.petsc import discrete_gradient, interpolation_matrix
 from dolfinx.fem import (
+    Constant,
+    Expression,
+    Function,
     dirichletbc,
     form,
-    Function,
-    Expression,
-    locate_dofs_topological,
     functionspace,
-    Constant,
+    locate_dofs_topological,
 )
+from dolfinx.fem.petsc import assemble_matrix_block, assemble_vector_block
+from mpi4py import MPI
+from petsc4py import PETSc
 from ufl import (
-    TrialFunction,
-    TestFunction,
-    inner,
-    grad,
-    div,
-    curl,
-    variable,
-    as_vector,
-    diff,
-    sin,
-    cos,
-    pi,
     SpatialCoordinate,
+    TestFunction,
+    TrialFunction,
+    as_vector,
+    curl,
+    diff,
+    div,
     dx,
+    grad,
+    inner,
+    variable,
 )
+
 from utils import L2_norm
 
 comm = MPI.COMM_WORLD
@@ -57,7 +55,6 @@ lagrange_elem = element("Lagrange", domain.basix_cell(), degree)
 V1 = functionspace(domain, lagrange_elem)
 
 x = SpatialCoordinate(domain)
-
 
 def exact(x, t):
     return as_vector((x[1] ** 2 + x[0] * t, x[2] ** 2 + x[1] * t, x[0] ** 2 + x[2] * t))
@@ -195,7 +192,7 @@ if degree == 1:
             (np.zeros_like(x[0]), np.zeros_like(x[0]), np.ones_like(x[0]))
         )
     )
-    pc0.setHYPRESetEdgeConstantVectors(cvec_0.vector, cvec_1.vector, cvec_2.vector)
+    pc0.setHYPRESetEdgeConstantVectors(cvec_0.x.petsc_vec, cvec_1.x.petsc_vec, cvec_2.x.petsc_vec)
 else:
     Vec_CG = functionspace(domain, ("CG", degree, (domain.geometry.dim,)))
     Pi = interpolation_matrix(Vec_CG._cpp_object, V._cpp_object)

@@ -1,37 +1,33 @@
-from mpi4py import MPI
 import numpy as np
-from petsc4py import PETSc
-from dolfinx import default_scalar_type, mesh
-from dolfinx.fem.petsc import assemble_vector_block, assemble_matrix_block
-from dolfinx.cpp.fem.petsc import discrete_gradient, interpolation_matrix
 from basix.ufl import element
+from dolfinx import default_scalar_type, mesh
 from dolfinx.fem import (
+    Constant,
+    Expression,
+    Function,
     dirichletbc,
     form,
-    Function,
-    Expression,
-    locate_dofs_topological,
     functionspace,
-    Constant,
+    locate_dofs_topological,
 )
+from dolfinx.fem.petsc import assemble_matrix_block, assemble_vector_block
+from mpi4py import MPI
+from petsc4py import PETSc
 from ufl import (
-    TrialFunction,
-    TestFunction,
-    inner,
-    grad,
-    div,
-    curl,
-    variable,
-    as_vector,
-    diff,
-    sin,
-    cos,
-    pi,
     SpatialCoordinate,
+    TestFunction,
+    TrialFunction,
+    as_vector,
+    curl,
+    diff,
+    div,
     dx,
+    grad,
+    inner,
+    variable,
 )
-from utils import L2_norm
 
+from utils import L2_norm
 
 comm = MPI.COMM_WORLD
 degree = 1

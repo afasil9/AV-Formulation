@@ -1,14 +1,24 @@
 import numpy as np
+from basix.ufl import element
+from dolfinx import default_scalar_type
+from dolfinx.cpp.fem.petsc import discrete_gradient, interpolation_matrix
+from dolfinx.fem import (
+    Constant,
+    Expression,
+    Function,
+    dirichletbc,
+    form,
+    functionspace,
+    locate_dofs_topological,
+)
+from dolfinx.fem.petsc import assemble_matrix_block, assemble_vector_block
+from dolfinx.io import VTXWriter
 from mpi4py import MPI
 from petsc4py import PETSc
-from dolfinx import default_scalar_type
-from dolfinx.fem import dirichletbc,form, Function, Expression, locate_dofs_topological, functionspace, Constant
-from dolfinx.fem.petsc import assemble_vector_block, assemble_matrix_block
-from dolfinx.cpp.fem.petsc import discrete_gradient, interpolation_matrix
-from dolfinx.io import VTXWriter
-from basix.ufl import element
-from ufl import grad, inner, curl, Measure, TrialFunction, TestFunction, variable, div
+from ufl import Measure, TestFunction, TrialFunction, curl, grad, inner
+
 from utils import par_print
+
 
 def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_t, num_steps, f0, f1, bc_dict, hn0, hn1, uex, wex, preconditioner, results):
 
@@ -46,10 +56,10 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
         for field, boundaries in conditions.items():
             if field == "V" and category == "dirichlet":
                 if not boundaries:
-                    par_print(comm,"No Dirichlet BCs present for Vector Potential")
+                    par_print(comm, "No Dirichlet BCs present for Vector Potential")
                     is_dirichlet_V = False
                 else:
-                    par_print(comm,"Dirichlet BCs are present for Vector Potential")
+                    par_print(comm, "Dirichlet BCs are present for Vector Potential")
                     is_dirichlet_V = True
                     for tags, value in boundaries.items():
                         boundary_entities = np.concatenate([facet_tags.find(tag) for tag in tags])
@@ -62,10 +72,10 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
                         bc0_list.append(dirichletbc(u_bc_V, bdofs))
             elif field == "V1" and category == "dirichlet":
                 if not boundaries:
-                    par_print(comm,"No Dirichlet BCs present for Scalar Potential")
+                    par_print(comm, "No Dirichlet BCs present for Scalar Potential")
                     is_dirichlet_V1 = False
                 else:
-                    par_print(comm,"Dirichlet BCs are present for Scalar Potential")
+                    par_print(comm, "Dirichlet BCs are present for Scalar Potential")
                     is_dirichlet_V1 = True
                     for tags, value in boundaries.items():
                         boundary_entities = np.concatenate([facet_tags.find(tag) for tag in tags])
@@ -78,18 +88,18 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
                         bc1_list.append(dirichletbc(w_bc_V1, bdofs))
             elif field == "V" and category == "neumann":
                 if not boundaries:
-                    par_print(comm,"No Neumann BCs present for Vector Potential")
+                    par_print(comm, "No Neumann BCs present for Vector Potential")
                     neumann_tags_V = None
                 else:
-                    par_print(comm,"Neumann BCs are present for Vector Potential")
+                    par_print(comm, "Neumann BCs are present for Vector Potential")
                     for tags, value in boundaries.items():
                         neumann_tags_V = tags
             elif field == "V1" and category == "neumann":
                 if not boundaries:
-                    par_print(comm,"No Neumann BCs present for Scalar Potential")
+                    par_print(comm, "No Neumann BCs present for Scalar Potential")
                     neumann_tags_V1 = None
                 else:
-                    par_print(comm,"Neumann BCs are present for Scalar Potential")
+                    par_print(comm, "Neumann BCs are present for Scalar Potential")
                     for tags, value in boundaries.items():
                         neumann_tags_V1 = tags
 
@@ -109,7 +119,7 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
     a11 = dt * inner(sigma * grad(w1), grad(v1)) * dx
 
 
-    if neumann_tags_V != None:
+    if neumann_tags_V is not None:
         L0 = (
             dt * inner(f0, v) * dx
             + sigma * inner(u_n, v) * dx
@@ -124,7 +134,7 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
         )
 
 
-    if neumann_tags_V1 != None:
+    if neumann_tags_V1 is not None:
         L1 = (
             dt * f1 * v1 * dx
             + sigma * inner(grad(v1), u_n) * dx
@@ -221,7 +231,9 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
                     (np.zeros_like(x[0]), np.zeros_like(x[0]), np.ones_like(x[0]))
                 )
             )
-            pc0.setHYPRESetEdgeConstantVectors(cvec_0.x.petsc_vec, cvec_1.x.petsc_vec, cvec_2.x.petsc_vec)
+            pc0.setHYPRESetEdgeConstantVectors(
+                cvec_0.x.petsc_vec, cvec_1.x.petsc_vec, cvec_2.x.petsc_vec
+            )
         else:
             Vec_CG = functionspace(domain, ("CG", degree, (domain.geometry.dim,)))
             Pi = interpolation_matrix(Vec_CG._cpp_object, V._cpp_object)
@@ -231,7 +243,7 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
             pc0.setHYPRESetInterpolations(domain.geometry.dim, None, None, Pi, None)
 
         opts = PETSc.Options()
-        opts[f"{ksp_u.prefix}pc_hypre_ams_cycle_type"] = 14
+        opts[f"{ksp_u.prefix}pc_hypre_ams_cycle_type"] = 7
         opts[f"{ksp_u.prefix}pc_hypre_ams_tol"] = 0
         opts[f"{ksp_u.prefix}pc_hypre_ams_max_iter"] = 1
         opts[f"{ksp_u.prefix}pc_hypre_ams_amg_beta_theta"] = 0.25
@@ -261,7 +273,7 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
     ksp.solve(b, sol)
 
     uh.x.array[:offset] = sol.array_r[:offset]
-    uh1.x.array[:(len(sol.array_r) - offset)] = sol.array_r[offset:]
+    uh1.x.array[: (len(sol.array_r) - offset)] = sol.array_r[offset:]
 
     uh.x.scatter_forward()
     uh1.x.scatter_forward()
@@ -285,7 +297,7 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
     B = curl(u_n)
     J = sigma * E
 
-    if results["postpro"] == True:
+    if results["postpro"] is True:
         if "A" in results["output_fields"]:
             A_vis = Function(vector_vis)
             A_file = VTXWriter(domain.comm, "A.bp", A_vis, "BP4")
@@ -318,9 +330,9 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
         u_n_prev = u_n.copy()
         w_n_prev = w_n.copy()
 
-        if is_dirichlet_V == True:
+        if is_dirichlet_V is True:
             u_bc_V.interpolate(u_expr_V)
-        if is_dirichlet_V1 == True:
+        if is_dirichlet_V1 is True:
             w_bc_V1.interpolate(w_expr_V1)
 
         b = assemble_vector_block(L, a, bcs=bc)
@@ -346,7 +358,7 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
         E = -grad(dw_dt) - da_dt
         J = sigma * E
 
-        if results["postpro"] == True and n % results["save_frequency"] == 0:
+        if results["postpro"] is True and n % results["save_frequency"] == 0:
             A_vis.interpolate(u_n)
             A_file.write(t.expression().value)
 
@@ -363,7 +375,7 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
             J_vis.interpolate(J_expr)
             J_file.write(t.expression().value)
 
-    if results["postpro"] == True:
+    if results["postpro"] is True:
         if "A" in results["output_fields"]:
             A_file.close()
         if "B" in results["output_fields"]:

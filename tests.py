@@ -1,9 +1,21 @@
+from dolfinx import fem
 from mpi4py import MPI
-from ufl import SpatialCoordinate, variable, as_vector, grad, curl, div, diff, sin, cos, pi, dot, cross, FacetNormal
+from ufl import (
+    FacetNormal,
+    SpatialCoordinate,
+    as_vector,
+    cross,
+    curl,
+    diff,
+    div,
+    dot,
+    grad,
+    variable,
+)
+
 from solver_non_sym import solver
 from solver_sym import solver_sym
-from dolfinx import fem
-from utils import L2_norm, create_mesh_fenics, create_mesh_gmsh
+from utils import L2_norm, create_mesh_fenics
 
 solver_type = "non symmetric"
 # solver_type = "symmetric"

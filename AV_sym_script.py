@@ -1,40 +1,38 @@
-from mpi4py import MPI
 import numpy as np
-from petsc4py import PETSc
-from dolfinx import default_scalar_type
-from dolfinx.fem.petsc import assemble_vector_block, assemble_matrix_block
-from dolfinx.cpp.fem.petsc import discrete_gradient, interpolation_matrix
-from dolfinx.io import VTXWriter
 from basix.ufl import element
-from ufl import (
-    TrialFunction,
-    TestFunction,
-    inner,
-    grad,
-    div,
-    curl,
-    cross,
-    dot,
-    variable,
-    as_vector,
-    diff,
-    sin,
-    cos,
-    pi,
-    Measure,
-    FacetNormal,
-    SpatialCoordinate,
-)
+from dolfinx import default_scalar_type
+from dolfinx.cpp.fem.petsc import discrete_gradient, interpolation_matrix
 from dolfinx.fem import (
+    Constant,
+    Expression,
+    Function,
     dirichletbc,
     form,
-    Function,
-    Expression,
-    locate_dofs_topological,
     functionspace,
-    Constant,
+    locate_dofs_topological,
 )
-from utils import L2_norm, create_mesh_fenics, create_mesh_gmsh, par_print
+from dolfinx.fem.petsc import assemble_matrix_block, assemble_vector_block
+from dolfinx.io import VTXWriter
+from mpi4py import MPI
+from petsc4py import PETSc
+from ufl import (
+    FacetNormal,
+    Measure,
+    SpatialCoordinate,
+    TestFunction,
+    TrialFunction,
+    as_vector,
+    cross,
+    curl,
+    diff,
+    div,
+    dot,
+    grad,
+    inner,
+    variable,
+)
+
+from utils import L2_norm, create_mesh_fenics, par_print
 
 comm = MPI.COMM_WORLD
 degree = 1
@@ -221,7 +219,7 @@ a10 = sigma * inner(grad(v1), u) * dx
 a11 = dt * inner(sigma * grad(w1), grad(v1)) * dx
 
 
-if neumann_tags_V != None:
+if neumann_tags_V is not None:
     L0 = (
         dt * inner(f0, v) * dx
         + sigma * inner(u_n, v) * dx
@@ -236,7 +234,7 @@ else:
     )
 
 
-if neumann_tags_V1 != None:
+if neumann_tags_V1 is not None:
     L1 = (
         dt * f1 * v1 * dx
         + sigma * inner(grad(v1), u_n) * dx
@@ -399,7 +397,7 @@ E = -grad(dw_dt) - da_dt
 B = curl(u_n)
 J = sigma * E
 
-if results["postpro"] == True:
+if results["postpro"] is True:
     if "A" in results["output_fields"]:
         A_vis = Function(vector_vis)
         A_file = VTXWriter(domain.comm, "A.bp", A_vis, "BP4")
@@ -432,9 +430,9 @@ for n in range(num_steps):
     u_n_prev = u_n.copy()
     w_n_prev = w_n.copy()
 
-    if is_dirichlet_V == True:
+    if is_dirichlet_V is True:
         u_bc_V.interpolate(u_expr_V)
-    if is_dirichlet_V1 == True:
+    if is_dirichlet_V1 is True:
         w_bc_V1.interpolate(w_expr_V1)
 
     b = assemble_vector_block(L, a, bcs=bc)
@@ -460,7 +458,7 @@ for n in range(num_steps):
     E = -grad(dw_dt) - da_dt
     J = sigma * E
 
-    if results["postpro"] == True and n % results["save_frequency"] == 0:
+    if results["postpro"] is True and n % results["save_frequency"] == 0:
         A_vis.interpolate(u_n)
         A_file.write(t.expression().value)
 
@@ -477,7 +475,7 @@ for n in range(num_steps):
         J_vis.interpolate(J_expr)
         J_file.write(t.expression().value)
 
-if results["postpro"] == True:
+if results["postpro"] is True:
     if "A" in results["output_fields"]:
         A_file.close()
     if "B" in results["output_fields"]:

@@ -1,44 +1,42 @@
-from mpi4py import MPI
 import numpy as np
-from petsc4py import PETSc
-from dolfinx import default_scalar_type
-from dolfinx.fem.petsc import assemble_vector_block, assemble_matrix_block
-from dolfinx.cpp.fem.petsc import discrete_gradient, interpolation_matrix
-from dolfinx.io import VTXWriter
 from basix.ufl import element
-from ufl import (
-    TrialFunction,
-    TestFunction,
-    inner,
-    grad,
-    div,
-    curl,
-    cross,
-    dot,
-    variable,
-    as_vector,
-    diff,
-    sin,
-    cos,
-    pi,
-    Measure,
-    FacetNormal,
-    SpatialCoordinate,
-)
+from dolfinx import default_scalar_type
+from dolfinx.cpp.fem.petsc import discrete_gradient, interpolation_matrix
 from dolfinx.fem import (
+    Constant,
+    Expression,
+    Function,
     dirichletbc,
     form,
-    Function,
-    Expression,
-    locate_dofs_topological,
     functionspace,
-    Constant,
+    locate_dofs_topological,
 )
-from utils import L2_norm, create_mesh_fenics, create_mesh_gmsh, par_print
+from dolfinx.fem.petsc import assemble_matrix_block, assemble_vector_block
+from dolfinx.io import VTXWriter
+from mpi4py import MPI
+from petsc4py import PETSc
+from ufl import (
+    FacetNormal,
+    Measure,
+    SpatialCoordinate,
+    TestFunction,
+    TrialFunction,
+    as_vector,
+    cross,
+    curl,
+    diff,
+    div,
+    dot,
+    grad,
+    inner,
+    variable,
+)
+
+from utils import L2_norm, create_mesh_fenics, par_print
 
 comm = MPI.COMM_WORLD
 degree = 1
-n = 8
+n = 4
 
 ti = 0.0  # Start time
 T = 0.1  # End time
@@ -66,14 +64,14 @@ sigma_ = 1.0
 # def exact1(x):
 #     return sin(pi * x[0]) * sin(pi * x[1]) * sin(pi * x[2])
 
+
 def exact(x, t):
-    return as_vector((
-        x[1]**2 + x[0] * t,
-        x[2]**2 + x[1] * t,
-        x[0]**2 + x[2] * t))
+    return as_vector((x[1] ** 2 + x[0] * t, x[2] ** 2 + x[1] * t, x[0] ** 2 + x[2] * t))
+
 
 def exact1(x):
-    return (x[0]**2) + (x[1]**2) + (x[2]**2)
+    return (x[0] ** 2) + (x[1] ** 2) + (x[2] ** 2)
+
 
 uex = exact(x, t)
 uex1 = exact1(x)
@@ -119,7 +117,7 @@ bc_dict = {
 results = {
     "postpro": False,
     "save_frequency": 10,
-    "output_fields": ["A", "B", "V", "J", "E"]
+    "output_fields": ["A", "B", "V", "J", "E"],
 }
 
 
@@ -176,10 +174,10 @@ for category, conditions in bc_dict.items():
                     bc0_list.append(dirichletbc(u_bc_V, bdofs))
         elif field == "V1" and category == "dirichlet":
             if not boundaries:
-                par_print(comm,"No Dirichlet BCs present for Scalar Potential")
+                par_print(comm, "No Dirichlet BCs present for Scalar Potential")
                 is_dirichlet_V1 = False
             else:
-                par_print(comm,"Dirichlet BCs are present for Scalar Potential")
+                par_print(comm, "Dirichlet BCs are present for Scalar Potential")
                 is_dirichlet_V1 = True
                 for tags, value in boundaries.items():
                     boundary_entities = np.concatenate([ft.find(tag) for tag in tags])
@@ -192,18 +190,18 @@ for category, conditions in bc_dict.items():
                     bc1_list.append(dirichletbc(u_bc_V1, bdofs))
         elif field == "V" and category == "neumann":
             if not boundaries:
-                par_print(comm,"No Neumann BCs present for Vector Potential")
+                par_print(comm, "No Neumann BCs present for Vector Potential")
                 neumann_tags_V = None
             else:
-                par_print(comm,"Neumann BCs are present for Vector Potential")
+                par_print(comm, "Neumann BCs are present for Vector Potential")
                 for tags, value in boundaries.items():
                     neumann_tags_V = tags
         elif field == "V1" and category == "neumann":
             if not boundaries:
-                par_print(comm,"No Neumann BCs present for Scalar Potential")
+                par_print(comm, "No Neumann BCs present for Scalar Potential")
                 neumann_tags_V1 = None
             else:
-                par_print(comm,"Neumann BCs are present for Scalar Potential")
+                par_print(comm, "Neumann BCs are present for Scalar Potential")
                 for tags, value in boundaries.items():
                     neumann_tags_V1 = tags
 
@@ -222,7 +220,7 @@ a10 = sigma * inner(grad(v1), u) * dx
 
 a11 = dt * inner(sigma * grad(u1), grad(v1)) * dx
 
-if neumann_tags_V != None:
+if neumann_tags_V is not None:
     L0 = (
         dt * inner(f0, v) * dx
         + sigma * inner(u_n, v) * dx
@@ -231,7 +229,7 @@ if neumann_tags_V != None:
 else:
     L0 = dt * inner(f0, v) * dx + sigma * inner(u_n, v) * dx
 
-if neumann_tags_V1 != None:
+if neumann_tags_V1 is not None:
     L1 = (
         dt * f1 * v1 * dx
         + sigma * inner(grad(v1), u_n) * dx
@@ -250,7 +248,7 @@ L = form([L0, L1])
 b = assemble_vector_block(L, a, bcs=bc)
 
 if preconditioner == "Direct":
-    par_print(comm,"Direct solve")
+    par_print(comm, "Direct solve")
     ksp = PETSc.KSP().create(domain.comm)
     ksp.setOperators(A_mat)
     ksp.setType("preonly")
@@ -266,7 +264,7 @@ if preconditioner == "Direct":
     opts["ksp_error_if_not_converged"] = 1
     ksp.setFromOptions()
 else:
-    par_print(comm,"AMS preconditioner")
+    par_print(comm, "AMS preconditioner")
 
     a_p = form([[a00, None], [None, a11]])
     P = assemble_matrix_block(a_p, bcs=bc)
@@ -325,7 +323,9 @@ else:
                 (np.zeros_like(x[0]), np.zeros_like(x[0]), np.ones_like(x[0]))
             )
         )
-        pc0.setHYPRESetEdgeConstantVectors(cvec_0.x.petsc_vec, cvec_1.x.petsc_vec, cvec_2.x.petsc_vec)
+        pc0.setHYPRESetEdgeConstantVectors(
+            cvec_0.x.petsc_vec, cvec_1.x.petsc_vec, cvec_2.x.petsc_vec
+        )
     else:
         Vec_CG = functionspace(domain, ("CG", degree, (domain.geometry.dim,)))
         Pi = interpolation_matrix(Vec_CG._cpp_object, V._cpp_object)
@@ -364,7 +364,7 @@ sol = A_mat.createVecRight()
 ksp.solve(b, sol)
 
 uh.x.array[:offset] = sol.array_r[:offset]
-uh1.x.array[:(len(sol.array_r) - offset)] = sol.array_r[offset:]
+uh1.x.array[: (len(sol.array_r) - offset)] = sol.array_r[offset:]
 
 uh.x.scatter_forward()
 uh1.x.scatter_forward()
@@ -384,7 +384,7 @@ E = -grad(u_n1) - da_dt
 B = curl(u_n)
 J = sigma * E
 
-if results["postpro"] == True:
+if results["postpro"] is True:
     if "A" in results["output_fields"]:
         A_vis = Function(vector_vis)
         A_file = VTXWriter(domain.comm, "A.bp", A_vis, "BP4")
@@ -415,9 +415,9 @@ for n in range(num_steps):
 
     u_n_prev = u_n.copy()
 
-    if is_dirichlet_V == True:
+    if is_dirichlet_V is True:
         u_bc_V.interpolate(u_expr_V)
-    if is_dirichlet_V1 == True:
+    if is_dirichlet_V1 is True:
         u_bc_V1.interpolate(u_expr_V1)
 
     b = assemble_vector_block(L, a, bcs=bc)
@@ -426,7 +426,7 @@ for n in range(num_steps):
     ksp.solve(b, sol)
 
     uh.x.array[:offset] = sol.array_r[:offset]
-    uh1.x.array[:(len(sol.array_r) - offset)] = sol.array_r[offset:]
+    uh1.x.array[: (len(sol.array_r) - offset)] = sol.array_r[offset:]
 
     uh.x.scatter_forward()
     uh1.x.scatter_forward()
@@ -442,7 +442,7 @@ for n in range(num_steps):
     E = -grad(u_n1) - da_dt
     J = sigma * E
 
-    if results["postpro"] == True and n % results["save_frequency"] == 0:
+    if results["postpro"] is True and n % results["save_frequency"] == 0:
         A_vis.interpolate(u_n)
         A_file.write(t.expression().value)
 
@@ -459,7 +459,7 @@ for n in range(num_steps):
         J_vis.interpolate(J_expr)
         J_file.write(t.expression().value)
 
-if results["postpro"] == True:
+if results["postpro"] is True:
     if "A" in results["output_fields"]:
         A_file.close()
     if "B" in results["output_fields"]:

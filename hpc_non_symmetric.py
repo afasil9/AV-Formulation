@@ -1,48 +1,51 @@
-#%%
-from mpi4py import MPI
+import json
+
 import numpy as np
-from petsc4py import PETSc
-from dolfinx import default_scalar_type
-from dolfinx.fem.petsc import assemble_vector_block, assemble_matrix_block
-from dolfinx.cpp.fem.petsc import discrete_gradient, interpolation_matrix
 from basix.ufl import element
-from ufl import (
-    TrialFunction,
-    TestFunction,
-    inner,
-    grad,
-    div,
-    curl,
-    cross,
-    dot,
-    variable,
-    as_vector,
-    diff,
-    sin,
-    cos,
-    pi,
-    Measure,
-    FacetNormal,
-    SpatialCoordinate,
-)
+from dolfinx import default_scalar_type
+from dolfinx.common import Timer
+from dolfinx.cpp.fem.petsc import discrete_gradient, interpolation_matrix
 from dolfinx.fem import (
+    Constant,
+    Expression,
+    Function,
     dirichletbc,
     form,
-    Function,
-    Expression,
-    locate_dofs_topological,
     functionspace,
-    Constant,
+    locate_dofs_topological,
 )
+from dolfinx.fem.petsc import assemble_matrix_block, assemble_vector_block
+from mpi4py import MPI
+from petsc4py import PETSc
+from ufl import (
+    FacetNormal,
+    Measure,
+    SpatialCoordinate,
+    TestFunction,
+    TrialFunction,
+    as_vector,
+    cos,
+    cross,
+    curl,
+    diff,
+    div,
+    dot,
+    grad,
+    inner,
+    pi,
+    sin,
+    variable,
+)
+
 from utils import L2_norm, create_mesh_fenics, par_print
-import json
-from dolfinx.common import Timer
 
 comm = MPI.COMM_WORLD
 degree = 1
 
 n_values = [2,4]
 results = {
+    "mesh_size": [],
+    "degree": degree,
     "dofs": [],
     "setup_times": [],
     "solve_times": [],
@@ -70,13 +73,17 @@ for n in n_values:
     sigma_ = 1.0
 
     def exact(x, t):
-        return as_vector((
-            x[1]**2 + x[0] * t,
-            x[2]**2 + x[1] * t,
-            x[0]**2 + x[2] * t))
+        return as_vector(
+            (
+                cos(pi * x[1]) * sin(pi * t),
+                cos(pi * x[2]) * sin(pi * t),
+                cos(pi * x[0]) * sin(pi * t),
+            )
+        )
+
 
     def exact1(x):
-        return (x[0]**2) + (x[1]**2) + (x[2]**2)
+        return sin(pi * x[0]) * sin(pi * x[1]) * sin(pi * x[2])
 
     uex = exact(x, t)
     uex1 = exact1(x)
@@ -209,9 +216,8 @@ for n in n_values:
     u_dofs = V.dofmap.index_map.size_global * V.dofmap.index_map_bs
     u1_dofs = V1.dofmap.index_map.size_global * V1.dofmap.index_map_bs
     total_dofs = u_dofs + u1_dofs
-    par_print(comm, f"Total degrees of freedom: {total_dofs}")
+    par_print(comm, f"Total degrees of freedom for V: {total_dofs}")
 
-    #%%
     a00 = dt * nu * inner(curl(u), curl(v)) * dx + sigma * inner(u, v) * dx
 
     a01 = dt * sigma * inner(grad(u1), v) * dx
@@ -219,7 +225,7 @@ for n in n_values:
 
     a11 = dt * inner(sigma * grad(u1), grad(v1)) * dx
 
-    if neumann_tags_V != None:
+    if neumann_tags_V is not None:
         L0 = (
             dt * inner(f0, v) * dx
             + sigma * inner(u_n, v) * dx
@@ -228,7 +234,7 @@ for n in n_values:
     else:
         L0 = dt * inner(f0, v) * dx + sigma * inner(u_n, v) * dx
 
-    if neumann_tags_V1 != None:
+    if neumann_tags_V1 is not None:
         L1 = (
             dt * f1 * v1 * dx
             + sigma * inner(grad(v1), u_n) * dx
@@ -352,8 +358,6 @@ for n in n_values:
         pc0.setUp()
         pc1.setUp()
 
-#%%
-
     u_n_prev = u_n.copy()
 
     uh, uh1 = Function(V), Function(V1)
@@ -396,9 +400,9 @@ for n in n_values:
 
         u_n_prev = u_n.copy()
 
-        if is_dirichlet_V == True:
+        if is_dirichlet_V is True:
             u_bc_V.interpolate(u_expr_V)
-        if is_dirichlet_V1 == True:
+        if is_dirichlet_V1 is True:
             u_bc_V1.interpolate(u_expr_V1)
 
         b = assemble_vector_block(L, a, bcs=bc)
@@ -419,7 +423,6 @@ for n in n_values:
         u_n1.x.scatter_forward()
 
     iteration_count = ksp.getIterationNumber()
-    # par_print(comm, iteration_count)
 
     timer_solve.stop()
     solve_time = timer_solve.elapsed()[0]
@@ -445,6 +448,7 @@ for n in n_values:
     # par_print(comm, f"E field error {L2_norm(E - E_exact)}")
     # par_print(comm, f"B field error {L2_norm(B - curl(uex))}")
 
+    results["mesh_size"].append(int(n))
     results["dofs"].append(int(total_dofs))
     results["setup_times"].append(float(setup_time))
     results["solve_times"].append(float(solve_time))
@@ -453,6 +457,5 @@ for n in n_values:
     results["B_errors"].append(float(B_error))
 
 if comm.rank == 0:
-    with open("convergence_results.json", "w") as f:
+    with open(f"convergence_results_{degree}.json", "w") as f:
         json.dump(results, f, indent=4)
-# %%
