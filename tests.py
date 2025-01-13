@@ -11,14 +11,17 @@ from ufl import (
     dot,
     grad,
     variable,
+    sin,
+    cos,
+    pi,
 )
 
 from solver_non_sym import solver
 from solver_sym import solver_sym
 from utils import L2_norm, create_mesh_fenics
 
-solver_type = "non symmetric"
-# solver_type = "symmetric"
+# solver_type = "non symmetric"
+solver_type = "symmetric"
 comm = MPI.COMM_WORLD
 degree = 1
 n = 4
@@ -38,17 +41,37 @@ t = variable(fem.Constant(domain, ti))
 nu_ = 1.0
 sigma_ = 1.0
 
+# Polynomial exact solution
+
+# def exact(x, t):
+#     return as_vector((
+#         x[1]**2 + x[0] * t,
+#         x[2]**2 + x[1] * t,
+#         x[0]**2 + x[2] * t))
+
+# def exact1_non(x):
+#     return (x[0]**2) + (x[1]**2) + (x[2]**2)
+
+# def exact1_time(x,t):
+#     return (x[0]**2) * t + (x[1]**2) * t + (x[2]**2) * t
+
+
 def exact(x, t):
-    return as_vector((
-        x[1]**2 + x[0] * t,
-        x[2]**2 + x[1] * t,
-        x[0]**2 + x[2] * t))
+    return as_vector(
+        (
+            cos(pi * x[1]) * sin(pi * t),
+            cos(pi * x[2]) * sin(pi * t),
+            cos(pi * x[0]) * sin(pi * t),
+        )
+    )
 
 def exact1_non(x):
-    return (x[0]**2) + (x[1]**2) + (x[2]**2)
+    return sin(pi * x[0]) * sin(pi * x[1]) * sin(pi * x[2])
 
-def exact1_time(x,t):
-    return (x[0]**2) * t + (x[1]**2) * t + (x[2]**2) * t
+
+def exact1_time(x, t):
+    return sin(pi * x[0]) * sin(pi * x[1]) * sin(pi * x[2]) * sin(pi * t)
+
 
 uex = exact(x, t)
 norm = FacetNormal(domain)

@@ -30,13 +30,16 @@ from ufl import (
     grad,
     inner,
     variable,
+    sin, 
+    cos,
+    pi,
 )
 
 from utils import L2_norm, create_mesh_fenics, par_print
 
 comm = MPI.COMM_WORLD
 degree = 1
-n = 4
+n = 8
 
 ti = 0.0  # Start time
 T = 0.1  # End time
@@ -51,26 +54,25 @@ t = variable(Constant(domain, ti))
 nu_ = 1.0
 sigma_ = 1.0
 
-# def exact(x, t):
-#     return as_vector(
-#         (
-#             cos(pi * x[1]) * sin(pi * t),
-#             cos(pi * x[2]) * sin(pi * t),
-#             cos(pi * x[0]) * sin(pi * t),
-#         )
-#     )
-
-
-# def exact1(x):
-#     return sin(pi * x[0]) * sin(pi * x[1]) * sin(pi * x[2])
-
-
 def exact(x, t):
-    return as_vector((x[1] ** 2 + x[0] * t, x[2] ** 2 + x[1] * t, x[0] ** 2 + x[2] * t))
-
+    return as_vector(
+        (
+            cos(pi * x[1]) * sin(pi * t),
+            cos(pi * x[2]) * sin(pi * t),
+            cos(pi * x[0]) * sin(pi * t),
+        )
+    )
 
 def exact1(x, t):
-    return (x[0] ** 2) * t + (x[1] ** 2) * t + (x[2] ** 2) * t
+    return sin(pi * x[0]) * sin(pi * x[1]) * sin(pi * x[2]) * sin(pi * t)
+
+
+# def exact(x, t):
+#     return as_vector((x[1] ** 2 + x[0] * t, x[2] ** 2 + x[1] * t, x[0] ** 2 + x[2] * t))
+
+
+# def exact1(x, t):
+#     return (x[0] ** 2) * t + (x[1] ** 2) * t + (x[2] ** 2) * t
 
 
 uex = exact(x, t)
