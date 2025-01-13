@@ -41,11 +41,13 @@ from utils import L2_norm, create_mesh_fenics, par_print
 
 comm = MPI.COMM_WORLD
 degree = 1
+nprocs = comm.Get_size()
 
 n_values = [2,4]
 results = {
     "mesh_size": [],
     "degree": degree,
+    "nprocs": nprocs,
     "dofs": [],
     "setup_times": [],
     "solve_times": [],
