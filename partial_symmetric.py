@@ -37,7 +37,7 @@ d_t = (T - ti) / num_steps  # Time step size
 
 domain = mesh.create_unit_cube(MPI.COMM_WORLD, n, n, n)
 gdim = domain.geometry.dim
-facet_dim = gdim - 1 
+facet_dim = gdim - 1
 
 t = variable(fem.Constant(domain, ti))
 dt = fem.Constant(domain, d_t)
@@ -52,6 +52,7 @@ V1 = fem.functionspace(domain, lagrange_elem)
 
 x = SpatialCoordinate(domain)
 
+
 def exact(x, t):
     return as_vector(
         (
@@ -61,17 +62,19 @@ def exact(x, t):
         )
     )
 
+
 def exact1(x, t):
     return sin(pi * x[0]) * sin(pi * x[1]) * sin(pi * x[2]) * sin(pi * t)
 
-uex = exact(x,t)
-wex1 = exact1(x,t)
+
+uex = exact(x, t)
+wex1 = exact1(x, t)
 
 du_dt_ex = diff(uex, t)
 dw_dt_ex = diff(wex1, t)
 
 
-f0 = nu * curl(curl(uex)) + sigma * du_dt_ex+ sigma * grad(dw_dt_ex)
+f0 = nu * curl(curl(uex)) + sigma * du_dt_ex + sigma * grad(dw_dt_ex)
 f1 = -div(f0)
 
 u_n = Function(V)
@@ -82,22 +85,20 @@ w_n1 = fem.Function(V1)
 wex_expr1 = Expression(wex1, V1.element.interpolation_points())
 w_n1.interpolate(wex_expr1)
 
+
 def boundary_marker(x):
     """Marker function for the boundary of a unit cube"""
     # Collect boundaries perpendicular to each coordinate axis
     boundaries = [
-        np.logical_or(np.isclose(x[i], 0.0), np.isclose(x[i], 1.0))
-        for i in range(3)]
-    return np.logical_or(np.logical_or(boundaries[0],
-                                        boundaries[1]),
-                            boundaries[2])
+        np.logical_or(np.isclose(x[i], 0.0), np.isclose(x[i], 1.0)) for i in range(3)
+    ]
+    return np.logical_or(np.logical_or(boundaries[0], boundaries[1]), boundaries[2])
 
 
 gdim = domain.geometry.dim
 facet_dim = gdim - 1
 
-facets = mesh.locate_entities_boundary(domain, dim=facet_dim,
-                                        marker= boundary_marker)
+facets = mesh.locate_entities_boundary(domain, dim=facet_dim, marker=boundary_marker)
 
 bdofs0 = fem.locate_dofs_topological(V, entity_dim=facet_dim, entities=facets)
 u_bc_expr_V = Expression(uex, V.element.interpolation_points())
@@ -113,13 +114,13 @@ bc_ex1 = dirichletbc(w_bc_V1, bdofs1)
 
 bc = [bc_ex, bc_ex1]
 
-u = TrialFunction(V) # u_n+1
+u = TrialFunction(V)  # u_n+1
 v = TestFunction(V)
 
-w1 = TrialFunction(V1) #w_n+1
+w1 = TrialFunction(V1)  # w_n+1
 v1 = TestFunction(V1)
 
-# Partial coupling exact magnetic vector potential 
+# Partial coupling with exact magnetic vector potential
 
 # a00 = dt * nu * inner(curl(u), curl(v)) * dx + sigma * inner(u, v) * dx
 
@@ -132,42 +133,50 @@ v1 = TestFunction(V1)
 # L1 = dt * f1 * v1 * dx + sigma * inner(grad(w_n1), grad(v1)) * dx + sigma * inner(grad(v1), u_n) * dx
 
 
-# Partial coupling exact scalar potential
+# Partial coupling with exact scalar potential
 
-a00 = dt * nu * inner(curl(u), curl(v)) * dx + sigma * inner(u, v) * dx 
+a00 = dt * nu * inner(curl(u), curl(v)) * dx + sigma * inner(u, v) * dx
 
 a01 = sigma * inner(grad(w1), v) * dx
 a10 = None
 
 a11 = sigma * inner(grad(w1), grad(v1)) * dx
 
-L0 = dt * inner(f0, v) * dx + sigma * inner(u_n, v) * dx + sigma * inner(grad(w_n1), v) * dx
-L1 = dt * f1 * v1 * dx + sigma * inner(grad(w_n1), grad(v1)) * dx - inner((sigma* du_dt_ex), grad(v1)) * dx
-
+L0 = (
+    dt * inner(f0, v) * dx
+    + sigma * inner(u_n, v) * dx
+    + sigma * inner(grad(w_n1), v) * dx
+)
+L1 = (
+    dt * f1 * v1 * dx
+    + sigma * inner(grad(w_n1), grad(v1)) * dx
+    - inner((sigma * du_dt_ex), grad(v1)) * dx
+)
 
 
 a = form([[a00, a01], [a10, a11]])
 
-A_mat = assemble_matrix_block(a, bcs = bc)
+A_mat = assemble_matrix_block(a, bcs=bc)
 A_mat.assemble()
 
 L = form([L0, L1])
-b = assemble_vector_block(L, a, bcs = bc)
+b = assemble_vector_block(L, a, bcs=bc)
 
-#%%
 
 a_p = form([[a00, None], [None, a11]])
-P = assemble_matrix_block(a_p, bcs = bc)
+P = assemble_matrix_block(a_p, bcs=bc)
 P.assemble()
 
-#Check this
+# Check this
 u_map = V.dofmap.index_map
 u1_map = V1.dofmap.index_map
 
 offset_u = u_map.local_range[0] * V.dofmap.index_map_bs + u1_map.local_range[0]
 offset_u1 = offset_u + u_map.size_local * V.dofmap.index_map_bs
 
-is_u = PETSc.IS().createStride(u_map.size_local * V.dofmap.index_map_bs, offset_u, 1, comm=PETSc.COMM_SELF)
+is_u = PETSc.IS().createStride(
+    u_map.size_local * V.dofmap.index_map_bs, offset_u, 1, comm=PETSc.COMM_SELF
+)
 is_u1 = PETSc.IS().createStride(u1_map.size_local, offset_u1, 1, comm=PETSc.COMM_SELF)
 
 ksp = PETSc.KSP().create(domain.comm)
@@ -193,21 +202,27 @@ pc0.setHYPREDiscreteGradient(G)
 
 if degree == 1:
     cvec_0 = Function(V)
-    cvec_0.interpolate(lambda x: np.vstack((np.ones_like(x[0]),
-                                            np.zeros_like(x[0]),
-                                            np.zeros_like(x[0]))))
+    cvec_0.interpolate(
+        lambda x: np.vstack(
+            (np.ones_like(x[0]), np.zeros_like(x[0]), np.zeros_like(x[0]))
+        )
+    )
     cvec_1 = Function(V)
-    cvec_1.interpolate(lambda x: np.vstack((np.zeros_like(x[0]),
-                                            np.ones_like(x[0]),
-                                            np.zeros_like(x[0]))))
+    cvec_1.interpolate(
+        lambda x: np.vstack(
+            (np.zeros_like(x[0]), np.ones_like(x[0]), np.zeros_like(x[0]))
+        )
+    )
     cvec_2 = Function(V)
-    cvec_2.interpolate(lambda x: np.vstack((np.zeros_like(x[0]),
-                                            np.zeros_like(x[0]),
-                                            np.ones_like(x[0]))))
+    cvec_2.interpolate(
+        lambda x: np.vstack(
+            (np.zeros_like(x[0]), np.zeros_like(x[0]), np.ones_like(x[0]))
+        )
+    )
 
     pc0.setHYPRESetEdgeConstantVectors(
         cvec_0.x.petsc_vec, cvec_1.x.petsc_vec, cvec_2.x.petsc_vec
-        )
+    )
 else:
     Vec_CG = fem.functionspace(domain, ("CG", degree, (domain.geometry.dim,)))
     Pi = interpolation_matrix(Vec_CG._cpp_object, V._cpp_object)
@@ -256,7 +271,7 @@ for n in range(num_steps):
 
     u_n_prev = u_n.copy()
     w_n1_prev = w_n1.copy()
-    
+
     u_bc_V.interpolate(u_bc_expr_V)
     w_bc_V1.interpolate(w_bc_expr_V1)
 
@@ -302,4 +317,3 @@ E_exact = -grad(dw_dt_exact) - da_dt_exact
 
 print("E field error", L2_norm(E - E_exact))
 print("B field error", L2_norm(B - curl(uex)))
-
