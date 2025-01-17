@@ -1,5 +1,5 @@
+# %%
 import numpy as np
-import ufl
 from basix.ufl import element
 from dolfinx import default_scalar_type, fem, mesh
 from dolfinx.cpp.fem.petsc import discrete_gradient, interpolation_matrix
@@ -23,6 +23,13 @@ from ufl import (
     grad,
     inner,
     variable,
+    TestFunction,
+    TrialFunction,
+    cos,
+    sin,
+    pi,
+    diff,
+    div,
 )
 
 from utils import L2_norm
@@ -30,21 +37,22 @@ from utils import L2_norm
 comm = MPI.COMM_WORLD
 degree = 1
 
-n = 4
+n = 8
 
 ti = 0.0  # Start time
 T = 0.1  # End time
-num_steps = 200  # Number of time steps
+num_steps = 100  # Number of time steps
 d_t = (T - ti) / num_steps  # Time step size
 
 domain = mesh.create_unit_cube(MPI.COMM_WORLD, n, n, n)
 gdim = domain.geometry.dim
-facet_dim = gdim - 1 #Topological dimension 
+facet_dim = gdim - 1  # Topological dimension
 
 t = variable(fem.Constant(domain, ti))
 dt = fem.Constant(domain, d_t)
 
 nu = fem.Constant(domain, default_scalar_type(1.0))
+x = SpatialCoordinate(domain)
 sigma = fem.Constant(domain, default_scalar_type(1.0))
 
 nedelec_elem = element("N1curl", domain.basix_cell(), degree)
@@ -52,33 +60,34 @@ V = fem.functionspace(domain, nedelec_elem)
 lagrange_elem = element("Lagrange", domain.basix_cell(), degree)
 V1 = fem.functionspace(domain, lagrange_elem)
 
-x = SpatialCoordinate(domain)
+
+# def exact(x, t):
+#     return as_vector((x[1] ** 2 + x[0] * t, x[2] ** 2 + x[1] * t, x[0] ** 2 + x[2] * t))
+
+
+# def exact1(x):
+#     return (x[0] ** 2) + (x[1] ** 2) + (x[2] ** 2)
+
 
 def exact(x, t):
-    return as_vector((
-        x[1]**2 + x[0] * t, 
-        x[2]**2 + x[1] * t, 
-        x[0]**2 + x[2] * t))
-
+    return as_vector(
+        (
+            cos(pi * x[1]) * sin(pi * t),
+            cos(pi * x[2]) * sin(pi * t),
+            cos(pi * x[0]) * sin(pi * t),
+        )
+    )
 
 def exact1(x):
-    return (x[0]**2) + (x[1]**2) + (x[2]**2)
-
+    return sin(pi * x[0]) * sin(pi * x[1]) * sin(pi * x[2])
 
 x = SpatialCoordinate(domain)
 
-uex = exact(x,t)
+uex = exact(x, t)
 uex1 = exact1(x)
 
-#Manually calculating the RHS
-
-f0 = ufl.as_vector((
-    -2 + 3*x[0],
-    -2 + 3*x[1],
-    -2 + 3*x[2])
-)
-
-f1 = fem.Constant(domain, -9.0)
+f0 = nu * curl(curl(uex)) + sigma * diff(uex, t) + sigma * grad(uex1)
+f1 = -div(f0)
 
 u_n = Function(V)
 u_expr = Expression(uex, V.element.interpolation_points())
@@ -88,22 +97,20 @@ u_n1 = fem.Function(V1)
 uex_expr1 = Expression(uex1, V1.element.interpolation_points())
 u_n1.interpolate(uex_expr1)
 
+
 def boundary_marker(x):
     """Marker function for the boundary of a unit cube"""
     # Collect boundaries perpendicular to each coordinate axis
     boundaries = [
-        np.logical_or(np.isclose(x[i], 0.0), np.isclose(x[i], 1.0))
-        for i in range(3)]
-    return np.logical_or(np.logical_or(boundaries[0],
-                                        boundaries[1]),
-                            boundaries[2])
+        np.logical_or(np.isclose(x[i], 0.0), np.isclose(x[i], 1.0)) for i in range(3)
+    ]
+    return np.logical_or(np.logical_or(boundaries[0], boundaries[1]), boundaries[2])
 
 
 gdim = domain.geometry.dim
 facet_dim = gdim - 1
 
-facets = mesh.locate_entities_boundary(domain, dim=facet_dim,
-                                        marker= boundary_marker)
+facets = mesh.locate_entities_boundary(domain, dim=facet_dim, marker=boundary_marker)
 
 bdofs0 = fem.locate_dofs_topological(V, entity_dim=facet_dim, entities=facets)
 u_bc_expr_V = Expression(uex, V.element.interpolation_points())
@@ -119,43 +126,65 @@ bc_ex1 = dirichletbc(u_bc_V1, bdofs1)
 
 bc = [bc_ex, bc_ex1]
 
-u = ufl.TrialFunction(V)
-v = ufl.TestFunction(V)
+u = TrialFunction(V)
+v = TestFunction(V)
 
-u1 = ufl.TrialFunction(V1)
-v1 = ufl.TestFunction(V1)
+u1 = TrialFunction(V1)
+v1 = TestFunction(V1)
 
-a00 = dt * nu * inner(curl(u), curl(v)) * dx
-a00 += inner((u*sigma), v) * dx 
-L0 = dt* ufl.inner(f0, v) * dx + sigma*ufl.inner(u_n, v) * dx - dt * sigma*ufl.inner(grad(uex1), v) * dx
+# Exact Scalar potential on RHS
 
-a01 = None
-a10 = sigma*ufl.inner(grad(v1), u) *dx
+# a00 = dt * nu * inner(curl(u), curl(v)) * dx + inner((u * sigma), v) * dx
 
-a11 = dt * ufl.inner(sigma*ufl.grad(u1), ufl.grad(v1)) * ufl.dx
-L1 = dt * f1 * v1 * ufl.dx + sigma*ufl.inner(grad(v1),u_n) *dx
+# a01 = None
+# a10 = sigma * inner(grad(v1), u) * dx
+
+# a11 = dt * inner(sigma * grad(u1), grad(v1)) * dx
+
+# L0 = (
+#     dt * inner(f0, v) * dx
+#     + sigma * inner(u_n, v) * dx
+#     - dt * sigma * inner(grad(uex1), v) * dx
+# )
+# L1 = dt * f1 * v1 * dx + sigma * inner(grad(v1), u_n) * dx
+
+# Exact vector potential on RHS
+
+a00 = dt * nu * inner(curl(u), curl(v)) * dx + inner((u * sigma), v) * dx
+
+a01 = dt * sigma * inner(grad(u1), v) * dx
+a10 = None
+
+a11 = dt * inner(sigma * grad(u1), grad(v1)) * dx
+
+L0 = dt * inner(f0, v) * dx + sigma * inner(u_n, v) * dx
+
+rhs = f1 + div(sigma * diff(uex, t))
+L1 = inner(rhs, v1) * dx
 
 
 a = form([[a00, a01], [a10, a11]])
 
-A_mat = assemble_matrix_block(a, bcs = bc)
+A_mat = assemble_matrix_block(a, bcs=bc)
 A_mat.assemble()
 
 L = form([L0, L1])
-b = assemble_vector_block(L, a, bcs = bc)
+b = assemble_vector_block(L, a, bcs=bc)
 
 a_p = form([[a00, None], [None, a11]])
-P = assemble_matrix_block(a_p, bcs = bc)
+P = assemble_matrix_block(a_p, bcs=bc)
 P.assemble()
 
-#Check this
+# Check this
 u_map = V.dofmap.index_map
 u1_map = V1.dofmap.index_map
 
 offset_u = u_map.local_range[0] * V.dofmap.index_map_bs + u1_map.local_range[0]
 offset_u1 = offset_u + u_map.size_local * V.dofmap.index_map_bs
 
-is_u = PETSc.IS().createStride(u_map.size_local * V.dofmap.index_map_bs, offset_u, 1, comm=PETSc.COMM_SELF)
+is_u = PETSc.IS().createStride(
+    u_map.size_local * V.dofmap.index_map_bs, offset_u, 1, comm=PETSc.COMM_SELF
+)
 is_u1 = PETSc.IS().createStride(u1_map.size_local, offset_u1, 1, comm=PETSc.COMM_SELF)
 
 
@@ -182,18 +211,26 @@ pc0.setHYPREDiscreteGradient(G)
 
 if degree == 1:
     cvec_0 = Function(V)
-    cvec_0.interpolate(lambda x: np.vstack((np.ones_like(x[0]),
-                                            np.zeros_like(x[0]),
-                                            np.zeros_like(x[0]))))
+    cvec_0.interpolate(
+        lambda x: np.vstack(
+            (np.ones_like(x[0]), np.zeros_like(x[0]), np.zeros_like(x[0]))
+        )
+    )
     cvec_1 = Function(V)
-    cvec_1.interpolate(lambda x: np.vstack((np.zeros_like(x[0]),
-                                            np.ones_like(x[0]),
-                                            np.zeros_like(x[0]))))
+    cvec_1.interpolate(
+        lambda x: np.vstack(
+            (np.zeros_like(x[0]), np.ones_like(x[0]), np.zeros_like(x[0]))
+        )
+    )
     cvec_2 = Function(V)
-    cvec_2.interpolate(lambda x: np.vstack((np.zeros_like(x[0]),
-                                            np.zeros_like(x[0]),
-                                            np.ones_like(x[0]))))
-    pc0.setHYPRESetEdgeConstantVectors(cvec_0.x.petsc_vec, cvec_1.x.petsc_vec, cvec_2.x.petsc_vec)
+    cvec_2.interpolate(
+        lambda x: np.vstack(
+            (np.zeros_like(x[0]), np.zeros_like(x[0]), np.ones_like(x[0]))
+        )
+    )
+    pc0.setHYPRESetEdgeConstantVectors(
+        cvec_0.x.petsc_vec, cvec_1.x.petsc_vec, cvec_2.x.petsc_vec
+    )
 else:
     Vec_CG = fem.functionspace(domain, ("CG", degree, (domain.geometry.dim,)))
     Pi = interpolation_matrix(Vec_CG._cpp_object, V._cpp_object)
@@ -223,32 +260,32 @@ ksp.setUp()
 pc0.setUp()
 pc1.setUp()
 
-print("norm of bc", L2_norm(u_bc_V))
-print("norm of uex", L2_norm(uex))
-print("norm of u_n", L2_norm(u_n))
-
 uh, uh1 = Function(V), Function(V1)
 offset = V.dofmap.index_map.size_local * V.dofmap.index_map_bs
 
 sol = A_mat.createVecRight()
 ksp.solve(b, sol)
 
-uh.x.array[:] = sol.array_r[:offset]
-uh1.x.array[:] = sol.array_r[offset:]
+uh.x.array[:offset] = sol.array_r[:offset]
+uh1.x.array[: (len(sol.array_r) - offset)] = sol.array_r[offset:]
+
+uh.x.scatter_forward()
+uh1.x.scatter_forward()
 
 u_n.x.array[:] = uh.x.array
 u_n1.x.array[:] = uh1.x.array
 
-print("norm of u_n after solve", L2_norm(u_n))
+u_n.x.scatter_forward()
+u_n1.x.scatter_forward()
+
 print(ksp.getTolerances())
 
-t_prev = variable(fem.Constant(domain, ti-d_t))
+t_prev = variable(fem.Constant(domain, ti - d_t))
 
 for n in range(num_steps):
-
     t.expression().value += d_t
     t_prev.expression().value += d_t
-    
+
     u_n_prev = u_n.copy()
     u_n1_prev = u_n1.copy()
 
@@ -262,8 +299,11 @@ for n in range(num_steps):
     sol = A_mat.createVecRight()
     ksp.solve(b, sol)
 
-    uh.x.array[:] = sol.array_r[:offset]
-    uh1.x.array[:] = sol.array_r[offset:]
+    uh.x.array[:offset] = sol.array_r[:offset]
+    uh1.x.array[: (len(sol.array_r) - offset)] = sol.array_r[offset:]
+
+    uh.x.scatter_forward()
+    uh1.x.scatter_forward()
 
     u_n.x.array[:] = uh.x.array
     u_n1.x.array[:] = uh1.x.array
@@ -282,6 +322,8 @@ for n in range(num_steps):
 # print("final uex", L2_norm(uex))
 # print("final uex prev", L2_norm(uex_prev))
 
+reason = ksp.getConvergedReason()
+
 da_dt_exact = (uex - uex_prev) / dt
 E_exact = -grad(uex1) - da_dt_exact
 
@@ -290,3 +332,4 @@ E = -grad(u_n1) - da_dt
 
 print("E field error", L2_norm(E - E_exact))
 print("B field error", L2_norm(curl(u_n - uex)))
+# %%
