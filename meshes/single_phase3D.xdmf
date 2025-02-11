@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<!DOCTYPE Xdmf SYSTEM "Xdmf.dtd" []>
+<Xdmf Version="3.0" xmlns:xi="https://www.w3.org/2001/XInclude">
+  <Domain>
+    <Grid Name="mesh" GridType="Uniform">
+      <Topology TopologyType="Tetrahedron" NumberOfElements="70189" NodesPerElement="4">
+        <DataItem Dimensions="70189 4" NumberType="Int" Format="HDF">single_phase3D.h5:/Mesh/mesh/topology</DataItem>
+      </Topology>
+      <Geometry GeometryType="XYZ">
+        <DataItem Dimensions="12120 3" Format="HDF">single_phase3D.h5:/Mesh/mesh/geometry</DataItem>
+      </Geometry>
+    </Grid>
+    <Grid Name="Cell_markers" GridType="Uniform">
+      <xi:include xpointer="xpointer(/Xdmf/Domain/Grid/Geometry)" />
+      <Topology TopologyType="Tetrahedron" NumberOfElements="70189" NodesPerElement="4">
+        <DataItem Dimensions="70189 4" NumberType="Int" Format="HDF">single_phase3D.h5:/MeshTags/Cell_markers/topology</DataItem>
+      </Topology>
+      <Attribute Name="Cell_markers" AttributeType="Scalar" Center="Cell">
+        <DataItem Dimensions="70189 1" Format="HDF">single_phase3D.h5:/MeshTags/Cell_markers/Values</DataItem>
+      </Attribute>
+    </Grid>
+    <Grid Name="Facet_markers" GridType="Uniform">
+      <xi:include xpointer="xpointer(/Xdmf/Domain/Grid/Geometry)" />
+      <Topology TopologyType="Triangle" NumberOfElements="1080" NodesPerElement="3">
+        <DataItem Dimensions="1080 3" NumberType="Int" Format="HDF">single_phase3D.h5:/MeshTags/Facet_markers/topology</DataItem>
+      </Topology>
+      <Attribute Name="Facet_markers" AttributeType="Scalar" Center="Cell">
+        <DataItem Dimensions="1080 1" Format="HDF">single_phase3D.h5:/MeshTags/Facet_markers/Values</DataItem>
+      </Attribute>
+    </Grid>
+  </Domain>
+</Xdmf>
