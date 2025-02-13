@@ -125,7 +125,7 @@ L0 = (
 a01 = sigma * inner(grad(w1), v) * dx
 a10 = sigma * inner(grad(v1), u) * dx
 
-a11 = dt * inner(sigma * grad(w1), grad(v1)) * dx
+a11 = inner(sigma * grad(w1), grad(v1)) * dx
 L1 = (
     dt * f1 * v1 * dx
     + sigma * inner(grad(v1), u_n) * dx

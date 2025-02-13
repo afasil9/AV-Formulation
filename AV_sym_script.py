@@ -1,3 +1,4 @@
+#%%
 import numpy as np
 from basix.ufl import element
 from dolfinx import default_scalar_type
@@ -97,7 +98,7 @@ bc_dict = {
                 boundaries["bottom"],
                 boundaries["top"],
                 boundaries["back"],
-                boundaries["left"],
+                boundaries["front"],
             ): uex
         },
         "V1": {
@@ -105,13 +106,13 @@ bc_dict = {
                 boundaries["bottom"],
                 boundaries["top"],
                 boundaries["back"],
-                boundaries["left"],
+                boundaries["front"],
             ): wex
         },
     },
     "neumann": {
-        "V": {(boundaries["front"], boundaries["right"]): uex},
-        "V1": {(boundaries["front"], boundaries["right"]): wex},
+        "V": {(boundaries["left"], boundaries["right"]): uex},
+        "V1": {(boundaries["left"], boundaries["right"]): wex},
     },
 }
 
@@ -218,7 +219,7 @@ a00 = dt * nu * inner(curl(u), curl(v)) * dx + sigma * inner(u, v) * dx
 a01 = sigma * inner(grad(w1), v) * dx
 a10 = sigma * inner(grad(v1), u) * dx
 
-a11 = dt * inner(sigma * grad(w1), grad(v1)) * dx
+a11 = inner(sigma * grad(w1), grad(v1)) * dx
 
 
 if neumann_tags_V is not None:
@@ -425,7 +426,6 @@ if results["postpro"] is True:
         E_vis.interpolate(E_expr)
         E_file = VTXWriter(domain.comm, "E.bp", E_vis, "BP4")
 
-
 for n in range(num_steps):
     t.expression().value += d_t
 
@@ -459,6 +459,8 @@ for n in range(num_steps):
     dw_dt = (w_n - w_n_prev) / dt
     E = -grad(dw_dt) - da_dt
     J = sigma * E
+
+    print("iterations", ksp.getIterationNumber())
 
     if results["postpro"] is True and n % results["save_frequency"] == 0:
         A_vis.interpolate(u_n)

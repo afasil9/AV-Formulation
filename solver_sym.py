@@ -116,7 +116,7 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
     a01 = sigma * inner(grad(w1), v) * dx
     a10 = sigma * inner(grad(v1), u) * dx
 
-    a11 = dt * inner(sigma * grad(w1), grad(v1)) * dx
+    a11 = inner(sigma * grad(w1), grad(v1)) * dx
 
 
     if neumann_tags_V is not None:
@@ -392,5 +392,8 @@ def solver_sym(comm, domain, facet_tags, domain_tags, degree, nu_, sigma_, t, d_
     B = curl(u_n)
     J = sigma * E
 
-    return E, B, J
+    iteration_count = ksp.getIterationNumber()
+
+
+    return E, B, J, iteration_count
 
