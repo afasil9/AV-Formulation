@@ -11,33 +11,29 @@ from dolfinx.fem import (
     form,
     functionspace,
     locate_dofs_topological,
+    assemble_scalar,
 )
 from dolfinx.fem.petsc import assemble_matrix_block, assemble_vector_block
 from dolfinx.io import VTXWriter
 from mpi4py import MPI
 from petsc4py import PETSc
 from ufl import (
-    FacetNormal,
     Measure,
     SpatialCoordinate,
     TestFunction,
     TrialFunction,
     as_vector,
-    cross,
     curl,
     diff,
     div,
-    dot,
     grad,
     inner,
     variable,
     cos,
     sin,
     pi,
-    MixedFunctionSpace,
 )
 from dolfinx.common import Timer
-from dolfinx.io import XDMFFile
 from utils import L2_norm, par_print, convert_facet_tags
 from dolfinx.mesh import create_submesh
 from generate_mesh import box_with_inner
@@ -61,6 +57,7 @@ t = variable(Constant(domain, ti))
 
 sigma_value = 1
 nu_value = 1
+
 
 def exact(x, t):
     return as_vector(
@@ -137,11 +134,11 @@ a11 = dt * inner(sigma * grad(u1), grad(v1)) * dx(inner_domain)
 a = form([[a00, a01], [a10, a11]], entity_maps=entity_maps)
 
 f01 = nu * curl(curl(uex))
-f02 = sigma * diff(uex, t) 
+f02 = sigma * diff(uex, t)
 f03 = sigma * grad(uex1)
 
-f11 = - div(sigma * diff(uex, t))
-f12 = -div(sigma * grad(uex1)) 
+f11 = -div(sigma * diff(uex, t))
+f12 = -div(sigma * grad(uex1))
 
 L0 = (
     dt * inner(f01, v) * dx(whole)
@@ -150,7 +147,11 @@ L0 = (
     + dt * inner(f03, v) * dx(inner_domain)
 )
 
-L1 = dt * f11 * v1 * dx(whole) + dt * f12 * v1 * dx(inner_domain) + inner(grad(v1), sigma * u_n) * dx(whole)
+L1 = (
+    dt * f11 * v1 * dx(whole)
+    + dt * f12 * v1 * dx(inner_domain)
+    + inner(grad(v1), sigma * u_n) * dx(whole)
+)
 
 L = form([L0, L1], entity_maps=entity_maps)
 
@@ -315,7 +316,6 @@ for n in range(num_steps):
     print(ksp.getConvergedReason())
 
 
-
 x_inner = SpatialCoordinate(domain)
 uex_inner = exact(x_inner, t)
 uex1_inner = exact1(x_inner)
@@ -330,14 +330,18 @@ da_dt_exact = (uex_final_inner - uex_prev_inner) / d_t
 E_exact = -grad(uex1) - da_dt_exact
 
 B_exact = curl(uex)
-#%%
 
+E_err = E - E_exact
+B_err = B - B_exact
 
-# par_print(comm, f"E field error {L2_norm(E - E_exact)}")
-par_print(comm, f"B field error {L2_norm(B - curl(uex))}")
+err = assemble_scalar(
+    form(inner(E_err, E_err) * dx(inner_domain), entity_maps=entity_maps)
+)
+E_field_error = np.sqrt(MPI.COMM_WORLD.allreduce(err, op=MPI.SUM))
+
+par_print(comm, f"E field error {E_field_error}")
+par_print(comm, f"B field error {L2_norm(B_err)}")
 
 iterations = ksp.getIterationNumber()
 
 par_print(comm, f"Number of iterations: {iterations}")
-
-# %%
