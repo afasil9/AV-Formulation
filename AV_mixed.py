@@ -36,7 +36,7 @@ from ufl import (
 from dolfinx.common import Timer
 from utils import L2_norm, par_print, convert_facet_tags
 from dolfinx.mesh import create_submesh
-from generate_mesh import box_with_inner
+from generate_mesh import box_with_inner, create_box_with_sphere_msh
 
 comm = MPI.COMM_WORLD
 degree = 1
@@ -46,7 +46,9 @@ T = 0.1  # End time
 num_steps = 10  # Number of time steps
 d_t = (T - ti) / num_steps  # Time step size
 
-domain, ct, ft, vol_ids, boundary_ids = box_with_inner(comm, 0.1)
+
+# domain, ct, ft, vol_ids, boundary_ids = box_with_inner(comm, 0.1)
+domain, ct, ft, vol_ids, boundary_ids = create_box_with_sphere_msh(comm, 0.025)
 
 
 tdim = domain.topology.dim
@@ -79,6 +81,7 @@ uex1 = exact1(x)
 
 tdim = domain.topology.dim
 fdim = tdim - 1
+
 
 inner_domain = vol_ids["inner"]
 outer_domain = vol_ids["outer"]
@@ -127,7 +130,7 @@ u_n1 = Function(V1)
 a00 = dt * inner(nu * curl(u), curl(v)) * dx(whole) + inner((u * sigma), v) * dx(whole)
 
 a01 = dt * inner(sigma * grad(u1), v) * dx(inner_domain)
-a10 = inner(sigma * u, grad(v1)) * dx(whole)
+a10 = inner(sigma * u, grad(v1)) * dx(inner_domain)
 
 a11 = dt * inner(sigma * grad(u1), grad(v1)) * dx(inner_domain)
 
@@ -148,16 +151,16 @@ L0 = (
 )
 
 L1 = (
-    dt * f11 * v1 * dx(whole)
+    dt * f11 * v1 * dx(inner_domain)
     + dt * f12 * v1 * dx(inner_domain)
-    + inner(grad(v1), sigma * u_n) * dx(whole)
+    + inner(grad(v1), sigma * u_n) * dx(inner_domain)
 )
 
 L = form([L0, L1], entity_maps=entity_maps)
 
 submesh_inner.topology.create_connectivity(fdim, tdim)
 ft_inner = convert_facet_tags(domain, submesh_inner, subdomain_inner_to_domain, ft)
-dofs_interface = locate_dofs_topological(V1, fdim, ft_inner.find(boundary_ids["inner"]))
+dofs_interface = locate_dofs_topological(V1, fdim, ft_inner.find(boundary_ids["interface"]))
 
 u_bc_inner = Function(V1)
 u_bc_expr_inner = Expression(uex1, V1.element.interpolation_points())
@@ -165,7 +168,7 @@ u_bc_inner.interpolate(u_bc_expr_inner)
 bc_inner = dirichletbc(u_bc_inner, dofs_interface)
 
 
-dofs_boundary = locate_dofs_topological(V, fdim, ft.find(boundary_ids["outer"]))
+dofs_boundary = locate_dofs_topological(V, fdim, ft.find(boundary_ids["boundary"]))
 
 u_bc_outer = Function(V)
 u_bc_expr_outer = Expression(uex, V.element.interpolation_points())
