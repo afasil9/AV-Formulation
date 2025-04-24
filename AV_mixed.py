@@ -37,6 +37,7 @@ from dolfinx.common import Timer
 from utils import L2_norm, par_print, convert_facet_tags
 from dolfinx.mesh import create_submesh
 from generate_mesh import box_with_inner, create_box_with_sphere_msh
+from dolfinx.io import XDMFFile
 
 comm = MPI.COMM_WORLD
 degree = 1
@@ -46,9 +47,15 @@ T = 0.1  # End time
 num_steps = 10  # Number of time steps
 d_t = (T - ti) / num_steps  # Time step size
 
+default_size = 0.1
+factor = 4
+cell_size = default_size / factor
+domain, ct, ft, vol_ids, boundary_ids = create_box_with_sphere_msh(comm, cell_size)
 
-# domain, ct, ft, vol_ids, boundary_ids = box_with_inner(comm, 0.1)
-domain, ct, ft, vol_ids, boundary_ids = create_box_with_sphere_msh(comm, 0.025)
+with XDMFFile(domain.comm, "box_with_inner.xdmf", "w") as xdmf:
+    xdmf.write_mesh(domain)
+    xdmf.write_meshtags(ct, domain.geometry)
+    xdmf.write_meshtags(ft, domain.geometry)
 
 
 tdim = domain.topology.dim
@@ -162,8 +169,12 @@ submesh_inner.topology.create_connectivity(fdim, tdim)
 ft_inner = convert_facet_tags(domain, submesh_inner, subdomain_inner_to_domain, ft)
 dofs_interface = locate_dofs_topological(V1, fdim, ft_inner.find(boundary_ids["interface"]))
 
+dofs_u0 = V.dofmap.index_map.size_local * V.dofmap.index_map_bs
+dofs_u1 = V1.dofmap.index_map.size_local * V1.dofmap.index_map_bs
+total_dofs = dofs_u0 + dofs_u1
+
 u_bc_inner = Function(V1)
-u_bc_expr_inner = Expression(uex1, V1.element.interpolation_points())
+u_bc_expr_inner = Expression(uex1, V1.element.interpolation_points)
 u_bc_inner.interpolate(u_bc_expr_inner)
 bc_inner = dirichletbc(u_bc_inner, dofs_interface)
 
@@ -171,7 +182,7 @@ bc_inner = dirichletbc(u_bc_inner, dofs_interface)
 dofs_boundary = locate_dofs_topological(V, fdim, ft.find(boundary_ids["boundary"]))
 
 u_bc_outer = Function(V)
-u_bc_expr_outer = Expression(uex, V.element.interpolation_points())
+u_bc_expr_outer = Expression(uex, V.element.interpolation_points)
 u_bc_outer.interpolate(u_bc_expr_outer)
 bc_outer = dirichletbc(u_bc_outer, dofs_boundary)
 
@@ -348,3 +359,11 @@ par_print(comm, f"B field error {L2_norm(B_err)}")
 iterations = ksp.getIterationNumber()
 
 par_print(comm, f"Number of iterations: {iterations}")
+
+# # Output files
+# with VTXWriter(MPI.COMM_WORLD, "E.bp", E, "bp4") as f:
+#     f.write(0.0)
+
+# with VTXWriter(MPI.COMM_WORLD, "B.bp", B, "bp4") as f:
+#     f.write(0.0)
+# %%
