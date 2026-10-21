@@ -1,10 +1,8 @@
-# %%
 import gmsh
-from dolfinx.io import XDMFFile, gmshio
+from dolfinx.io import XDMFFile, gmsh as gmshio
 from dolfinx import mesh
 from mpi4py import MPI
-
-#%%
+import numpy as np
 
 def box_with_inner(comm, h):
 
@@ -49,9 +47,9 @@ def box_with_inner(comm, h):
     mesh_comm = MPI.COMM_WORLD
     mesh_data = gmshio.model_to_mesh(gmsh.model, mesh_comm, model_rank)
 
-    msh = mesh_data[0]
-    ct = mesh_data[1]
-    ft = mesh_data[2]
+    msh = mesh_data.mesh
+    ct = mesh_data.cell_tags
+    ft = mesh_data.facet_tags
 
     ct.name = "ct"
     ft.name = "ft"
@@ -93,6 +91,8 @@ def create_box_with_sphere_msh(comm, h):
 
         gmsh.model.occ.synchronize()
 
+        ov = sorted(ov, key=lambda e: gmsh.model.occ.getMass(*e))
+
         # Add physical groups
         gmsh.model.addPhysicalGroup(3, [ov[0][1]], vol_ids["inner"])
         gmsh.model.addPhysicalGroup(3, [ov[1][1]], vol_ids["outer"])
@@ -110,18 +110,98 @@ def create_box_with_sphere_msh(comm, h):
 
         gmsh.model.mesh.generate(d)
 
-    partitioner = mesh.create_cell_partitioner(mesh.GhostMode.none)
+    partitioner = mesh.create_cell_partitioner(mesh.GhostMode.none, 2)
         
     mesh_data = gmshio.model_to_mesh(gmsh.model, comm, 0, gdim=d, partitioner=partitioner)
     
-    msh = mesh_data[0]
-    ct = mesh_data[1]
-    ft = mesh_data[2]
+    msh = mesh_data.mesh
+    ct = mesh_data.cell_tags
+    ft = mesh_data.facet_tags
     
     gmsh.finalize()
     return msh, ct, ft, vol_ids, bound_ids
 
 
 
-#%%
 
+def create_mesh_fenics(comm, n, size_inner=4.0, split_faces=False):
+    """
+    Create a hexahedral unit cube mesh with an inner conductive box centred
+    at (0.5, 0.5, 0.5).
+
+    Parameters:
+        n: number of cells in each direction
+        size_inner: half-width of the inner box in number of cells
+        split_faces: tag each face of the inner box separately instead of
+            using a single interface tag
+    """
+
+    msh = mesh.create_unit_cube(comm, n, n, n, cell_type=mesh.CellType.hexahedron)
+
+    tdim = msh.topology.dim
+    fdim = tdim - 1
+
+    # Tags for volumes and boundaries
+    vol_ids = {"inner": 1, "outer": 0}
+    if split_faces:
+        bound_ids = {
+            "boundary": 2,
+            "interface_xmin": 3,
+            "interface_xmax": 4,
+            "interface_ymin": 5,
+            "interface_ymax": 6,
+            "interface_zmin": 7,
+            "interface_zmax": 8,
+        }
+    else:
+        bound_ids = {
+            "boundary": 2,  # Boundary
+            "interface": 3,  # Interface
+        }
+
+    # Cells whose midpoint lies inside the inner box (including ghosts)
+    cell_imap = msh.topology.index_map(tdim)
+    num_cells = cell_imap.size_local + cell_imap.num_ghosts
+    cells = np.arange(num_cells, dtype=np.int32)
+    mids = mesh.compute_midpoints(msh, tdim, cells)
+
+    inner_loc = size_inner / n
+    eps = 1e-12
+    is_inner = np.all(np.abs(mids - 0.5) < inner_loc + eps, axis=1)
+
+    cell_values = np.where(is_inner, vol_ids["inner"], vol_ids["outer"]).astype(np.int32)
+    ct = mesh.meshtags(msh, tdim, cells, cell_values)
+
+    # Outer boundary of the unit cube
+    msh.topology.create_connectivity(fdim, tdim)
+    boundary_facets = mesh.exterior_facet_indices(msh.topology)
+
+    # Interface = facets touching both regions
+    inner_facets = mesh.compute_incident_entities(msh.topology, cells[is_inner], tdim, fdim)
+    outer_facets = mesh.compute_incident_entities(msh.topology, cells[~is_inner], tdim, fdim)
+    interface_facets = np.intersect1d(inner_facets, outer_facets)
+
+    if split_faces:
+        # Classify each interface facet by the plane of the inner box it lies in
+        f_mids = mesh.compute_midpoints(msh, fdim, interface_facets.astype(np.int32))
+        box_min = 0.5 - inner_loc
+        box_max = 0.5 + inner_loc
+        tol = 1e-6
+        interface_values = np.zeros(interface_facets.size, dtype=np.int32)
+        for i, ax in enumerate("xyz"):
+            interface_values[np.abs(f_mids[:, i] - box_min) < tol] = bound_ids[f"interface_{ax}min"]
+            interface_values[np.abs(f_mids[:, i] - box_max) < tol] = bound_ids[f"interface_{ax}max"]
+    else:
+        interface_values = np.full(interface_facets.size, bound_ids["interface"], dtype=np.int32)
+
+    facets = np.concatenate([boundary_facets, interface_facets]).astype(np.int32)
+    values = np.concatenate(
+        [np.full(boundary_facets.size, bound_ids["boundary"], dtype=np.int32), interface_values]
+    )
+    order = np.argsort(facets)
+    ft = mesh.meshtags(msh, fdim, facets[order], values[order])
+
+    ct.name = "ct"
+    ft.name = "ft"
+
+    return msh, ct, ft, vol_ids, bound_ids
