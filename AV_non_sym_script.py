@@ -1,3 +1,4 @@
+#%%
 import numpy as np
 from basix.ufl import element
 from dolfinx import default_scalar_type
@@ -30,7 +31,11 @@ from ufl import (
     grad,
     inner,
     variable,
+    cos, 
+    sin, 
+    pi,
 )
+from dolfinx.common import Timer
 
 from utils import L2_norm, create_mesh_fenics, par_print
 
@@ -51,26 +56,26 @@ t = variable(Constant(domain, ti))
 nu_ = 1.0
 sigma_ = 1.0
 
-# def exact(x, t):
-#     return as_vector(
-#         (
-#             cos(pi * x[1]) * sin(pi * t),
-#             cos(pi * x[2]) * sin(pi * t),
-#             cos(pi * x[0]) * sin(pi * t),
-#         )
-#     )
-
-
-# def exact1(x):
-#     return sin(pi * x[0]) * sin(pi * x[1]) * sin(pi * x[2])
-
-
 def exact(x, t):
-    return as_vector((x[1] ** 2 + x[0] * t, x[2] ** 2 + x[1] * t, x[0] ** 2 + x[2] * t))
+    return as_vector(
+        (
+            cos(pi * x[1]) * sin(pi * t),
+            cos(pi * x[2]) * sin(pi * t),
+            cos(pi * x[0]) * sin(pi * t),
+        )
+    )
 
 
 def exact1(x):
-    return (x[0] ** 2) + (x[1] ** 2) + (x[2] ** 2)
+    return sin(pi * x[0]) * sin(pi * x[1]) * sin(pi * x[2])
+
+
+# def exact(x, t):
+#     return as_vector((x[1] ** 2 + x[0] * t, x[2] ** 2 + x[1] * t, x[0] ** 2 + x[2] * t))
+
+
+# def exact1(x):
+#     return (x[0] ** 2) + (x[1] ** 2) + (x[2] ** 2)
 
 
 uex = exact(x, t)
@@ -92,24 +97,28 @@ bc_dict = {
     "dirichlet": {
         "V": {
             (
-                boundaries["bottom"],
                 boundaries["top"],
+                boundaries["bottom"],
+                boundaries["front"],
                 boundaries["back"],
                 boundaries["left"],
+                boundaries["right"],
             ): uex
         },
         "V1": {
             (
-                boundaries["bottom"],
                 boundaries["top"],
+                boundaries["bottom"],
+                boundaries["front"],
                 boundaries["back"],
                 boundaries["left"],
+                boundaries["right"],
             ): uex1
         },
     },
     "neumann": {
-        "V": {(boundaries["front"], boundaries["right"]): uex},
-        "V1": {(boundaries["front"], boundaries["right"]): uex1},
+        "V": {},
+        "V1": {},
     },
 }
 
@@ -213,30 +222,33 @@ v = TestFunction(V)
 u1 = TrialFunction(V1)
 v1 = TestFunction(V1)
 
-a00 = dt * nu * inner(curl(u), curl(v)) * dx + sigma * inner(u, v) * dx
+a00 = dt * inner(nu * curl(u), curl(v)) * dx + inner((u * sigma), v) * dx
 
-a01 = dt * sigma * inner(grad(u1), v) * dx
-a10 = sigma * inner(grad(v1), u) * dx
+a01 = dt * inner(sigma * grad(u1), v) * dx
+a10 = inner(sigma * u, grad(v1)) * dx
 
 a11 = dt * inner(sigma * grad(u1), grad(v1)) * dx
+
+#%%
+
 
 if neumann_tags_V is not None:
     L0 = (
         dt * inner(f0, v) * dx
-        + sigma * inner(u_n, v) * dx
+        + inner(sigma * u_n, v) * dx
         + dt * inner(hn0, v) * ds(neumann_tags_V)
     )
 else:
-    L0 = dt * inner(f0, v) * dx + sigma * inner(u_n, v) * dx
+    L0 = dt * inner(f0, v) * dx + inner(sigma * u_n, v) * dx
 
 if neumann_tags_V1 is not None:
     L1 = (
         dt * f1 * v1 * dx
-        + sigma * inner(grad(v1), u_n) * dx
+        + inner(sigma * u_n, grad(v1)) * dx
         - dt * inner(hn1, v1) * ds(neumann_tags_V1)
     )
 else:
-    L1 = dt * f1 * v1 * dx + sigma * inner(grad(v1), u_n) * dx
+    L1 = dt * f1 * v1 * dx + inner(grad(v1), sigma * u_n) * dx
 
 
 a = form([[a00, a01], [a10, a11]])
@@ -335,8 +347,8 @@ else:
         pc0.setHYPRESetInterpolations(domain.geometry.dim, None, None, Pi, None)
 
     opts = PETSc.Options()
-    opts[f"{ksp_u.prefix}pc_hypre_ams_cycle_type"] = 14
-    opts[f"{ksp_u.prefix}pc_hypre_ams_tol"] = 0
+    opts[f"{ksp_u.prefix}pc_hypre_ams_cycle_type"] = 7
+    # opts[f"{ksp_u.prefix}pc_hypre_ams_tol"] = 0
     opts[f"{ksp_u.prefix}pc_hypre_ams_max_iter"] = 1
     opts[f"{ksp_u.prefix}pc_hypre_ams_amg_beta_theta"] = 0.25
     opts[f"{ksp_u.prefix}pc_hypre_ams_print_level"] = 1
@@ -361,19 +373,6 @@ uh, uh1 = Function(V), Function(V1)
 offset = V.dofmap.index_map.size_local * V.dofmap.index_map_bs
 
 sol = A_mat.createVecRight()
-ksp.solve(b, sol)
-
-uh.x.array[:offset] = sol.array_r[:offset]
-uh1.x.array[: (len(sol.array_r) - offset)] = sol.array_r[offset:]
-
-uh.x.scatter_forward()
-uh1.x.scatter_forward()
-
-u_n.x.array[:] = uh.x.array
-u_n1.x.array[:] = uh1.x.array
-
-u_n.x.scatter_forward()
-u_n1.x.scatter_forward()
 
 vector_vis = functionspace(
     domain, ("Discontinuous Lagrange", degree + 1, (domain.geometry.dim,))
@@ -485,3 +484,7 @@ E_exact = -grad(uex1) - da_dt_exact
 
 par_print(comm, f"E field error {L2_norm(E - E_exact)}")
 par_print(comm, f"B field error {L2_norm(B - curl(uex))}")
+
+iterations = ksp.getIterationNumber()
+
+par_print(comm, f"Number of iterations: {iterations}")
