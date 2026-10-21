@@ -1,6 +1,8 @@
-#%%
+import json
+
 from mpi4py import MPI
 from dolfinx import fem
+from dolfinx.common import Timer
 from dolfinx.fem import (
     Function,
     form,
@@ -182,13 +184,16 @@ bc_outer = fem.dirichletbc(u_bc_outer, dofs_boundary)
 bcs = [bc_inner, bc_outer]
 
 # Solver steps
+par_print(comm, "Assembling system")
 
-A_mat = assemble_matrix(a, bcs=bcs)
-A_mat.assemble()
+with Timer("Setup: Assembling system") as a_mat_timer:
+    A_mat = assemble_matrix(a, bcs=bcs)
+    A_mat.assemble()
 
-a_p = form([[a00, None], [None, a11]], entity_maps=entity_maps)
-P = assemble_matrix(a_p, bcs=bcs)
-P.assemble()
+    a_p = form([[a00, None], [None, a11]], entity_maps=entity_maps)
+    P = assemble_matrix(a_p, bcs=bcs)
+    P.assemble()
+assembly_time = a_mat_timer.elapsed().total_seconds()
 
 bcs1 = bcs_by_block(extract_function_spaces(a, 1), bcs)
 bcs0 = bcs_by_block(extract_function_spaces(L), bcs)
@@ -203,6 +208,9 @@ is_u = PETSc.IS().createStride(
     u_map.size_local * V.dofmap.index_map_bs, offset_u, 1, comm=domain.comm
 )
 is_u1 = PETSc.IS().createStride(u1_map.size_local, offset_u1, 1, comm=domain.comm)
+
+par_print(comm, "Setting up preconditioner")
+timer_pc = Timer("Setup: Preconditioner")
 
 ksp = PETSc.KSP().create(domain.comm)
 ksp.setOperators(A_mat, P)
@@ -312,10 +320,17 @@ ksp.setUp()
 ksp_u.getPC().setUp()
 ksp_u1.getPC().setUp()
 
+timer_pc.stop()
+pc_assembly_time = timer_pc.elapsed().total_seconds()
+
 uh, uh1 = Function(V), Function(V1)
 offset = V.dofmap.index_map.size_local * V.dofmap.index_map_bs
 
 u_n_prev = fem.Function(V)
+
+assembly_time_rhs = []
+solve_time = []
+iterations = []
 
 for n in range(num_steps):
 
@@ -328,14 +343,19 @@ for n in range(num_steps):
     u_bc_inner.interpolate(u_bc_expr_inner)
     u_bc_outer.interpolate(u_bc_expr_outer)
 
-    b = assemble_vector(L)
-    apply_lifting(b, a, bcs=bcs1)
-    b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
-    set_bc(b, bcs0)
+    with Timer("Assembling RHS") as rhs_timer:
+        b = assemble_vector(L)
+        apply_lifting(b, a, bcs=bcs1)
+        b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
+        set_bc(b, bcs0)
+    assembly_time_rhs.append(rhs_timer.elapsed().total_seconds())
 
     sol = A_mat.createVecRight()
 
-    ksp.solve(b, sol)
+    with Timer("Solve") as timer_solve:
+        ksp.solve(b, sol)
+    solve_time.append(timer_solve.elapsed().total_seconds())
+    iterations.append(ksp.getIterationNumber())
 
     uh.x.array[:offset] = sol.array_r[:offset]
     uh1.x.array[:(len(sol.array_r) - offset)] = sol.array_r[offset:]
@@ -380,3 +400,22 @@ E_field_error = np.sqrt(comm.allreduce(err, op=MPI.SUM))
 par_print(comm, f"E field error {E_field_error}")
 par_print(comm, f"B field error {L2_norm(B_err)}")
 par_print(comm, f"Number of iterations: {ksp.getIterationNumber()}")
+
+timings = {
+    "mesh_type": mesh_type,
+    "total_dofs": total_dofs,
+    "num_steps": num_steps,
+    "assemble_matrix": assembly_time,
+    "assemble_preconditioner": pc_assembly_time,
+    "assemble_rhs": assembly_time_rhs,
+    "assemble_rhs_total": sum(assembly_time_rhs),
+    "solve": solve_time,
+    "solve_total": sum(solve_time),
+    "iterations": iterations,
+}
+
+if comm.rank == 0:
+    timings_file = f"timings_mixed_{mesh_type}.json"
+    print(f"Saving timings to '{timings_file}'.")
+    with open(timings_file, "w") as f:
+        json.dump(timings, f, indent=4)
