@@ -2,17 +2,25 @@
 import numpy as np
 from basix.ufl import element
 from dolfinx import default_scalar_type
-from dolfinx.cpp.fem.petsc import discrete_gradient, interpolation_matrix
 from dolfinx.fem import (
     Constant,
     Expression,
     Function,
+    bcs_by_block,
     dirichletbc,
+    extract_function_spaces,
     form,
     functionspace,
     locate_dofs_topological,
 )
-from dolfinx.fem.petsc import assemble_matrix_block, assemble_vector_block
+from dolfinx.fem.petsc import (
+    apply_lifting,
+    assemble_matrix,
+    assemble_vector,
+    discrete_gradient,
+    interpolation_matrix,
+    set_bc,
+)
 from dolfinx.io import VTXWriter
 from mpi4py import MPI
 from petsc4py import PETSc
@@ -152,11 +160,11 @@ total_dofs = u_dofs + u1_dofs
 par_print(comm, f"Total degrees of freedom: {total_dofs}")
 
 u_n = Function(V)
-u_expr = Expression(uex, V.element.interpolation_points())
+u_expr = Expression(uex, V.element.interpolation_points)
 u_n.interpolate(u_expr)
 
 u_n1 = Function(V1)
-uex_expr1 = Expression(uex1, V1.element.interpolation_points())
+uex_expr1 = Expression(uex1, V1.element.interpolation_points)
 u_n1.interpolate(uex_expr1)
 
 bc0_list = []
@@ -177,7 +185,7 @@ for category, conditions in bc_dict.items():
                     bdofs = locate_dofs_topological(V, facet_dim, boundary_entities)
                     u_bc_V = Function(V)
                     u_expr_V = Expression(
-                        value, V.element.interpolation_points(), comm=MPI.COMM_SELF
+                        value, V.element.interpolation_points, comm=MPI.COMM_SELF
                     )
                     u_bc_V.interpolate(u_expr_V)
                     bc0_list.append(dirichletbc(u_bc_V, bdofs))
@@ -193,7 +201,7 @@ for category, conditions in bc_dict.items():
                     bdofs = locate_dofs_topological(V1, facet_dim, boundary_entities)
                     u_bc_V1 = Function(V1)
                     u_expr_V1 = Expression(
-                        value, V1.element.interpolation_points(), comm=MPI.COMM_SELF
+                        value, V1.element.interpolation_points, comm=MPI.COMM_SELF
                     )
                     u_bc_V1.interpolate(u_expr_V1)
                     bc1_list.append(dirichletbc(u_bc_V1, bdofs))
@@ -253,11 +261,16 @@ else:
 
 a = form([[a00, a01], [a10, a11]])
 
-A_mat = assemble_matrix_block(a, bcs=bc)
+A_mat = assemble_matrix(a, bcs=bc, kind="mpi")
 A_mat.assemble()
 
 L = form([L0, L1])
-b = assemble_vector_block(L, a, bcs=bc)
+b = assemble_vector(L)
+bcs1 = bcs_by_block(extract_function_spaces(a, 1), bc)
+apply_lifting(b, a, bcs=bcs1)
+b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
+bcs0 = bcs_by_block(extract_function_spaces(L), bc)
+set_bc(b, bcs0)
 
 if preconditioner == "Direct":
     par_print(comm, "Direct solve")
@@ -279,20 +292,20 @@ else:
     par_print(comm, "AMS preconditioner")
 
     a_p = form([[a00, None], [None, a11]])
-    P = assemble_matrix_block(a_p, bcs=bc)
+    P = assemble_matrix(a_p, bcs=bc, kind="mpi")
     P.assemble()
 
     u_map = V.dofmap.index_map
     u1_map = V1.dofmap.index_map
 
-    offset_u = u_map.local_range[0] * V.dofmap.index_map_bs + u1_map.local_range[0]
+    offset_u = A_mat.getOwnershipRange()[0]
     offset_u1 = offset_u + u_map.size_local * V.dofmap.index_map_bs
 
     is_u = PETSc.IS().createStride(
-        u_map.size_local * V.dofmap.index_map_bs, offset_u, 1, comm=PETSc.COMM_SELF
+        u_map.size_local * V.dofmap.index_map_bs, offset_u, 1, comm=domain.comm
     )
     is_u1 = PETSc.IS().createStride(
-        u1_map.size_local, offset_u1, 1, comm=PETSc.COMM_SELF
+        u1_map.size_local, offset_u1, 1, comm=domain.comm
     )
 
     ksp = PETSc.KSP().create(domain.comm)
@@ -311,8 +324,8 @@ else:
     pc0.setType("hypre")
     pc0.setHYPREType("ams")
 
-    V_CG = functionspace(domain, ("CG", degree))._cpp_object
-    G = discrete_gradient(V_CG, V._cpp_object)
+    V_CG = functionspace(domain, ("CG", degree))
+    G = discrete_gradient(V_CG, V)
     G.assemble()
     pc0.setHYPREDiscreteGradient(G)
 
@@ -340,7 +353,7 @@ else:
         )
     else:
         Vec_CG = functionspace(domain, ("CG", degree, (domain.geometry.dim,)))
-        Pi = interpolation_matrix(Vec_CG._cpp_object, V._cpp_object)
+        Pi = interpolation_matrix(Vec_CG, V)
         Pi.assemble()
 
         # Attach discrete gradient to preconditioner
@@ -392,7 +405,7 @@ if results["postpro"] is True:
     if "B" in results["output_fields"]:
         B_vis = Function(vector_vis)
         B_file = VTXWriter(domain.comm, "B.bp", B_vis, "BP4")
-        Bexpr = Expression(B, vector_vis.element.interpolation_points())
+        Bexpr = Expression(B, vector_vis.element.interpolation_points)
         B_vis.interpolate(Bexpr)
         B_file.write(t.expression().value)
     if "V" in results["output_fields"]:
@@ -400,12 +413,12 @@ if results["postpro"] is True:
         V_file.write(t.expression().value)
     if "J" in results["output_fields"]:
         J_vis = Function(vector_vis)
-        J_expr = Expression(J, vector_vis.element.interpolation_points())
+        J_expr = Expression(J, vector_vis.element.interpolation_points)
         J_vis.interpolate(J_expr)
         J_file = VTXWriter(domain.comm, "J.bp", J_vis, "BP4")
     if "E" in results["output_fields"]:
         E_vis = Function(vector_vis)
-        E_expr = Expression(E, vector_vis.element.interpolation_points())
+        E_expr = Expression(E, vector_vis.element.interpolation_points)
         E_vis.interpolate(E_expr)
         E_file = VTXWriter(domain.comm, "E.bp", E_vis, "BP4")
 
@@ -419,7 +432,12 @@ for n in range(num_steps):
     if is_dirichlet_V1 is True:
         u_bc_V1.interpolate(u_expr_V1)
 
-    b = assemble_vector_block(L, a, bcs=bc)
+    b = assemble_vector(L)
+    bcs1 = bcs_by_block(extract_function_spaces(a, 1), bc)
+    apply_lifting(b, a, bcs=bcs1)
+    b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
+    bcs0 = bcs_by_block(extract_function_spaces(L), bc)
+    set_bc(b, bcs0)
 
     sol = A_mat.createVecRight()
     ksp.solve(b, sol)
@@ -450,11 +468,11 @@ for n in range(num_steps):
         B_vis.interpolate(Bexpr)
         B_file.write(t.expression().value)
 
-        E_expr = Expression(E, vector_vis.element.interpolation_points())
+        E_expr = Expression(E, vector_vis.element.interpolation_points)
         E_vis.interpolate(E_expr)
         E_file.write(t.expression().value)
 
-        J_expr = Expression(J, vector_vis.element.interpolation_points())
+        J_expr = Expression(J, vector_vis.element.interpolation_points)
         J_vis.interpolate(J_expr)
         J_file.write(t.expression().value)
 
